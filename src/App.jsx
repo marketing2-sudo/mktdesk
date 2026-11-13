@@ -1525,7 +1525,7 @@ export default function App() {
                 },
                 {
                   id: 'config',
-                  label: 'Configurações, PWA & E-mails',
+                  label: 'Serviços, Status & Configurações',
                   icon: Settings
                 }
               ].map((tab) => {
@@ -1699,12 +1699,20 @@ export default function App() {
                 isStandalonePWA={isStandalonePWA}
                 onInstallPWA={triggerPWAInstall}
                 onSaveSettings={async (updated) => {
-                  await persistSettingsDoc(updated);
-                  showFloatingPopup({
-                    title: 'Configurações Salvas',
-                    message: 'Regras de SLA, convites e integração foram atualizadas.',
-                    type: 'success'
-                  });
+                  try {
+                    await persistSettingsDoc(updated);
+                    showFloatingPopup({
+                      title: 'Configurações Salvas no Supabase',
+                      message: 'Serviços, status e regras de SLA foram atualizados.',
+                      type: 'success'
+                    });
+                  } catch (err) {
+                    showFloatingPopup({
+                      title: 'Erro ao salvar configurações',
+                      message: err?.message || 'Confira as permissões no Supabase.',
+                      type: 'warning'
+                    });
+                  }
                 }}
                 onTestPopupAndSound={() => {
                   showFloatingPopup({
@@ -3361,7 +3369,7 @@ function AdminSettingsPanel({
     const hours = Number(serviceHours);
     if (!name || !Number.isFinite(hours) || hours < 1 || hours > 8760) return;
     if ((draft.categories || []).some(c => c.name.toLowerCase() === name.toLowerCase() && c.id !== editingServiceId)) return;
-    const next = {id: editingServiceId || `cat-${crypto.randomUUID()}`, name, description: serviceDescription.trim(), slaHours: hours, active: true};
+    const next = {id: editingServiceId || `cat-${crypto.randomUUID()}`, name, description: serviceDescription.trim(), slaHours: hours, active: editingServiceId ? (draft.categories || []).find(c => c.id === editingServiceId)?.active !== false : true};
     setDraft(prev => ({...prev, categories: editingServiceId
       ? prev.categories.map(c => c.id === editingServiceId ? {...c, ...next} : c)
       : [...prev.categories, next]}));
@@ -3376,7 +3384,7 @@ function AdminSettingsPanel({
     if (!name) return;
     const current = draft.customStages || [];
     if (current.some(x => x.name.toLowerCase() === name.toLowerCase() && x.id !== editingStageId)) return;
-    const value = {id: editingStageId || `stage-${crypto.randomUUID()}`, name, baseStatus: stageBase, active: true};
+    const value = {id: editingStageId || `stage-${crypto.randomUUID()}`, name, baseStatus: stageBase, active: editingStageId ? (draft.customStages || []).find(c => c.id === editingStageId)?.active !== false : true};
     setDraft(prev => ({...prev, customStages: editingStageId
       ? (prev.customStages || []).map(x => x.id === editingStageId ? {...x,...value} : x)
       : [...(prev.customStages || []),value]}));
@@ -3449,8 +3457,7 @@ function AdminSettingsPanel({
               Governança, Convites & Integrações
             </h2>
             <p className="text-xs text-slate-500">
-              Configure códigos de convite, restrição opcional de domínio e
-              disparos automáticos via Webhook.
+              Configurações legadas de cadastro e integrações. Códigos compartilhados não concedem permissões no Supabase.
             </p>
           </div>
           <button
@@ -3598,8 +3605,24 @@ function AdminSettingsPanel({
         </div>
       </div>
 
+      {/* Acesso direto e identificação da versão implantada. */}
+      <section className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-indigo-950">Gestão de Serviços e Status</h2>
+            <p className="text-xs text-indigo-700">Versão 0.3 · Catálogo editável e etapas personalizadas · Supabase</p>
+          </div>
+          <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-700 border border-indigo-200">Painel do Administrador</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <a href="#catalogo-servicos" className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold">Cadastrar serviços e prazos</a>
+          <a href="#status-personalizados" className="px-4 py-2 rounded-lg bg-white text-indigo-700 border border-indigo-200 text-xs font-bold">Cadastrar status</a>
+        </div>
+        <p className="text-xs text-indigo-800">Após adicionar ou editar, clique em Salvar Configurações no topo da página para gravar no Supabase.</p>
+      </section>
+
       {/* Catálogo editável: salvo no registro app_settings, protegido por RLS de admin. */}
-      <section className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+      <section id="catalogo-servicos" className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4 scroll-mt-36">
         <div>
           <h3 className="text-lg font-bold text-slate-900">Gestão de Serviços e SLAs</h3>
           <p className="text-xs text-slate-500">Cadastre serviços e os prazos em horas corridas. Mudanças de prazo afetam novos chamados, não os anteriores.</p>
@@ -3624,7 +3647,7 @@ function AdminSettingsPanel({
         </form>
         <p className="text-xs text-amber-700 font-semibold">Para gravar as alterações no Supabase, clique em “Salvar Configurações” no início desta página.</p>
       </section>
-      <section className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+      <section id="status-personalizados" className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4 scroll-mt-36">
         <h3 className="text-lg font-bold text-slate-900">Status personalizados</h3>
         <p className="text-xs text-slate-500">Crie etapas específicas vinculadas ao status principal. As ações de pausa, aprovação e conclusão continuam no fluxo padrão, preservando a contagem do SLA.</p>
         {(draft.customStages || []).map(stage => (

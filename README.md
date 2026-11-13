@@ -56,3 +56,19 @@ where id=(select id from auth.users where email='SEU_EMAIL@EMPRESA.COM.BR');
 - A funcionalidade de **convites individuais** discutida anteriormente não foi implementada neste pacote. Não considere os códigos da interface antiga como convites seguros.
 - Migração dos chamados existentes e notificações por e-mail não foram alteradas.
 - A sintaxe JSX foi analisada, mas o build completo depende do ambiente Vercel (instalação de dependências indisponível nesta sessão).
+
+
+## Versão 0.3: atualização visual e correção de publicação
+
+- Na aba do administrador agora aparece **Serviços, Status & Configurações**.
+- No topo das configurações aparece o selo **Versão 0.3**, com atalhos **Cadastrar serviços e prazos** e **Cadastrar status**.
+- O botão **Salvar Configurações** exibe um erro se a gravação no Supabase falhar, em vez de sinalizar sucesso.
+- O formulário conserva a situação ativo/inativo ao editar um serviço ou status.
+
+### Muito importante ao atualizar pelo navegador no GitHub
+
+O ZIP tem arquivos na **raiz** (`src`, `supabase`, `package.json`, `index.html`). Atualize os arquivos nos mesmos caminhos do repositório. O GitHub pela interface web pode **não substituir arquivos existentes automaticamente** se o upload for feito por uma pasta errada. Confirme que `src/App.jsx` do repositório contém a expressão `Versão 0.3`. Depois faça commit e confira o deployment do commit correto na Vercel.
+
+Não execute novamente `schema.sql` se as tabelas já existem. O SQL adicional `supabase/servicos-sla.sql` também não precisa ser repetido se já foi executado com sucesso.
+
+**Limites:** status personalizados são subetapas do fluxo existente, não alteram automaticamente a pausa do SLA. Convites individuais continuam fora do escopo desta entrega. A segurança das políticas de chamados/notificações e webhooks exige revisão antes do uso em produção com dados reais.
