@@ -578,10 +578,31 @@ export default function App() {
   }, [authUser?.id, reloadData]);
 
   const saveRecord = useCallback(async (table, value, extras = {}) => {
-    if (!supabaseConfigured || !authUser) throw new Error('Faça login no Supabase para salvar.');
-    const { error } = await supabase.from(table).upsert({id:value.id, data:value, ...extras}, {onConflict:'id'});
-    if (error) { setDataError(error.message); throw error; }
-    await reloadData();
+    if (!supabaseConfigured || !authUser) {
+      const error = new Error('Faça login no Supabase para salvar.');
+      setDataError(error.message);
+      throw error;
+    }
+    // IMPORTANTE: não usar upsert nos chamados.
+    // O PostgreSQL executa os triggers BEFORE INSERT mesmo no caminho
+    // ON CONFLICT DO UPDATE, bloqueando transições para SAC/produção/aprovação.
+    // Verificamos o registro e usamos INSERT ou UPDATE explicitamente.
+    try {
+      const { data: existing, error: lookupError } = await supabase
+        .from(table).select('id').eq('id', value.id).maybeSingle();
+      if (lookupError) throw lookupError;
+
+      const payload = { id: value.id, data: value, ...extras };
+      const { data: changed, error } = existing
+        ? await supabase.from(table).update(payload).eq('id', value.id).select('id')
+        : await supabase.from(table).insert(payload).select('id');
+      if (error) throw error;
+      if (!changed?.length) throw new Error('Registro não foi salvo. Confira as permissões no Supabase.');
+      await reloadData();
+    } catch (error) {
+      setDataError(`Falha ao salvar ${table}: ${error.message || String(error)}`);
+      throw error;
+    }
   }, [authUser, reloadData]);
 
   const persistUserDoc = useCallback(async (userObj) => {
@@ -1499,6 +1520,15 @@ export default function App() {
         canInstallPWA={Boolean(deferredInstallPrompt) || (isIOSDevice && !isStandalonePWA)}
         onInstallPWA={triggerPWAInstall}
       />
+
+      {dataError && (
+        <div role="alert" className="mx-auto w-full max-w-7xl px-6 py-3">
+          <div className="flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+            <span><strong>Erro ao salvar ou sincronizar:</strong> {dataError}</span>
+            <button type="button" className="font-bold underline" onClick={() => setDataError('')}>Fechar</button>
+          </div>
+        </div>
+      )}
 
       {/* BARRA DE NAVEGAÇÃO SUPERIOR (DESKTOP) POR PERFIL */}
       {currentUser.role === 'admin' && (
@@ -5049,11 +5079,13 @@ function TicketDetailModal({
                   />
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={async () => {
                       if (!sacQuestion.trim()) return;
-                      onPauseForSAC(sacQuestion);
-                      setSacQuestion('');
-                      setActionMode('chat');
+                      try {
+                        await onPauseForSAC(sacQuestion);
+                        setSacQuestion('');
+                        setActionMode('chat');
+                      } catch (error) { console.error('Falha ao pausar SAC:', error); }
                     }}
                     className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold"
                   >
@@ -5083,11 +5115,13 @@ function TicketDetailModal({
                   />
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={async () => {
                       if (!deliveryNotes.trim()) return;
-                      onSendDelivery({ deliveryNotes, deliveryLink });
-                      setDeliveryNotes('');
-                      setActionMode('chat');
+                      try {
+                        await onSendDelivery({ deliveryNotes, deliveryLink });
+                        setDeliveryNotes('');
+                        setActionMode('chat');
+                      } catch (error) { console.error('Falha ao enviar para aprovação:', error); }
                     }}
                     className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
                   >

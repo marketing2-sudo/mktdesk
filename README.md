@@ -72,3 +72,11 @@ O ZIP tem arquivos na **raiz** (`src`, `supabase`, `package.json`, `index.html`)
 Não execute novamente `schema.sql` se as tabelas já existem. O SQL adicional `supabase/servicos-sla.sql` também não precisa ser repetido se já foi executado com sucesso.
 
 **Limites:** status personalizados são subetapas do fluxo existente, não alteram automaticamente a pausa do SLA. Convites individuais continuam fora do escopo desta entrega. A segurança das políticas de chamados/notificações e webhooks exige revisão antes do uso em produção com dados reais.
+
+## Correção das ações dos chamados (hotfix 0.3.1)
+
+A versão anterior usava `.upsert()` até para atualizar chamados existentes. Em PostgreSQL/Supabase o caminho `ON CONFLICT DO UPDATE` pode passar pelas regras de INSERT, e a política `ticket_create` exige que o solicitante seja o usuário atual. Assim, quando um administrador tentava assumir um chamado de outra pessoa, a gravação podia ser bloqueada. O arquivo `src/App.jsx` agora consulta a existência do registro e utiliza `insert` somente para criar e `update` para modificar. A interface também exibe mensagens de erros do Supabase no topo da tela.
+
+**Não execute novamente nenhum SQL nem desative o RLS para esta correção.** Atualize o `src/App.jsx` no mesmo caminho do GitHub, gere um novo deploy da branch de produção e faça os testes: (1) assumir chamado criado por outro usuário, (2) pedir informações e confirmar o estado `aguardando_solicitante`, (3) registrar resposta como solicitante, (4) enviar entrega para aprovação. Confira os resultados em `Table Editor > tickets` e observe os erros exibidos na tela caso alguma política adicional bloqueie as operações.
+
+**Limitação:** não foi possível executar o build local porque as dependências npm não estão instaladas neste ambiente. Valide o `Ready` do novo commit na Vercel. A correção não foi testada conectando ao banco Supabase do usuário.
