@@ -47,44 +47,7 @@ import {
   UserX,
   Inbox
 } from 'lucide-react';
-import { initializeApp, getApps } from 'firebase/app';
-import {
-  getAuth,
-  signInAnonymously,
-  signInWithCustomToken,
-  onAuthStateChanged
-} from 'firebase/auth';
-import {
-  getFirestore,
-  doc,
-  setDoc,
-  onSnapshot,
-  collection
-} from 'firebase/firestore';
-
-/**
- * ============================================================================
- * CONFIGURAÇÃO DE PERSISTÊNCIA HÍBRIDA (FIREBASE FIRESTORE + FALLBACK SEGURO)
- * ============================================================================
- */
-const HAS_FIREBASE =
-  typeof __firebase_config !== 'undefined' && Boolean(__firebase_config);
-
-let firebaseAuth = null;
-let firebaseDb = null;
-const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'mktdesk-prod-v1';
-
-if (HAS_FIREBASE) {
-  try {
-    const parsedConfig = JSON.parse(__firebase_config);
-    const fbApp =
-      getApps().length === 0 ? initializeApp(parsedConfig) : getApps()[0];
-    firebaseAuth = getAuth(fbApp);
-    firebaseDb = getFirestore(fbApp);
-  } catch (err) {
-    console.warn('Falha ao inicializar Firebase, operando em modo local:', err);
-  }
-}
+import { supabase, supabaseConfigured } from './supabase';
 
 // Armazenamento local seguro contra bloqueios de sandbox/iframe
 const memoryFallbackStore = {};
@@ -189,8 +152,8 @@ const DEPARTMENTS = [
 ];
 
 const DEFAULT_SETTINGS = {
-  techInviteCode: 'MKT-TEC-2026',
-  adminInviteCode: 'MKT-ADM-2026',
+  techInviteCode: '',
+  adminInviteCode: '',
   allowedDomains: '', // Vazio por padrão para permitir uso imediato; configurável pelo Admin
   webhookUrl: '',
   webhookSecret: '',
@@ -277,28 +240,6 @@ const ROLE_META = {
  * FUNÇÕES UTILITÁRIAS (HASH, DATAS, SLA GLPI, ÁUDIO WEB API, ÍCONES PWA)
  * ============================================================================
  */
-function hashPassword(plain) {
-  const salted = `mktdesk_salt_2026::${String(plain || '')}`;
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-  for (let i = 0; i < salted.length; i++) {
-    const ch = salted.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 =
-    Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
-    Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 =
-    Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
-    Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (
-    (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16) +
-    '-' +
-    (h1 >>> 0).toString(16)
-  );
-}
-
 function generateId(prefix = 'id') {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return `${prefix}_${crypto.randomUUID()}`;
@@ -531,26 +472,16 @@ function generateAppIconDataUrl(size) {
  * ============================================================================
  */
 export default function App() {
-  // Estado de autenticação técnica do Firebase (quando ativo no ambiente)
-  const [fbAuthUser, setFbAuthUser] = useState(null);
-
-  // Estados principais de produção — INICIAM 100% VAZIOS (ZERO DADOS DE TESTE)
-  const [users, setUsers] = useState(() => safeStorageGet('users', []));
-  const [tickets, setTickets] = useState(() => safeStorageGet('tickets', []));
-  const [notifications, setNotifications] = useState(() =>
-    safeStorageGet('notifications', [])
-  );
-  const [emailLogs, setEmailLogs] = useState(() =>
-    safeStorageGet('emailLogs', [])
-  );
-  const [settings, setSettings] = useState(() =>
-    safeStorageGet('settings', DEFAULT_SETTINGS)
-  );
-
-  // Sessão do usuário corporativo logado
-  const [currentUserId, setCurrentUserId] = useState(() =>
-    safeStorageGet('currentUserId', null)
-  );
+  // Supabase Auth identifica a sessão; perfis e registros vêm do banco.
+  const [authUser, setAuthUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataError, setDataError] = useState('');
+  const [users, setUsers] = useState([]);
+  const [tickets, setTickets] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [emailLogs, setEmailLogs] = useState([]);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [currentUserId, setCurrentUserId] = useState(null);
   const currentUser = useMemo(
     () => users.find((u) => u.id === currentUserId && u.active !== false) || null,
     [users, currentUserId]
@@ -587,307 +518,98 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Persistência local sincronizada
-  useEffect(() => safeStorageSet('users', users), [users]);
-  useEffect(() => safeStorageSet('tickets', tickets), [tickets]);
-  useEffect(() => safeStorageSet('notifications', notifications), [notifications]);
-  useEffect(() => safeStorageSet('emailLogs', emailLogs), [emailLogs]);
-  useEffect(() => safeStorageSet('settings', settings), [settings]);
-  useEffect(() => safeStorageSet('currentUserId', currentUserId), [currentUserId]);
+  // Preferência de áudio é local; dados corporativos NUNCA usam localStorage.
   useEffect(() => safeStorageSet('soundEnabled', soundEnabled), [soundEnabled]);
 
-  /**
-   * --------------------------------------------------------------------------
-   * REGRA 3 DO FIREBASE: Autenticação antes de qualquer consulta Firestore
-   * --------------------------------------------------------------------------
-   */
   useEffect(() => {
-    if (!HAS_FIREBASE || !firebaseAuth) return;
+    if (!supabaseConfigured) { setAuthLoading(false); return; }
     let mounted = true;
-    const initAuth = async () => {
-      try {
-        if (
-          typeof __initial_auth_token !== 'undefined' &&
-          __initial_auth_token
-        ) {
-          await signInWithCustomToken(firebaseAuth, __initial_auth_token);
-        } else {
-          await signInAnonymously(firebaseAuth);
-        }
-      } catch (err) {
-        console.warn('Auth Firebase em modo resiliente:', err);
-      }
-    };
-    initAuth();
-    const unsub = onAuthStateChanged(firebaseAuth, (u) => {
-      if (mounted) setFbAuthUser(u);
+    supabase.auth.getUser().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) setDataError(error.message);
+      setAuthUser(data.user || null);
+      setCurrentUserId(data.user?.id || null);
+      setAuthLoading(false);
     });
-    return () => {
-      mounted = false;
-      unsub();
-    };
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+      setAuthUser(session?.user || null);
+      setCurrentUserId(session?.user?.id || null);
+    });
+    return () => { mounted = false; subscription.unsubscribe(); };
   }, []);
 
-  /**
-   * Sincronização em tempo real com Firestore (quando disponível no ambiente)
-   */
+  const reloadData = useCallback(async () => {
+    if (!supabaseConfigured || !authUser) return;
+    const results = await Promise.all([
+      supabase.from('profiles').select('id,role,active,data,created_at'),
+      supabase.from('tickets').select('id,data'),
+      supabase.from('notifications').select('id,data'),
+      supabase.from('email_logs').select('id,data'),
+      supabase.from('app_settings').select('data').eq('id', 1).maybeSingle()
+    ]);
+    const errors = results.filter((r) => r.error).map((r) => r.error.message);
+    if (errors.length) { setDataError(errors.join(' | ')); return; }
+    setDataError('');
+    setUsers(results[0].data.map((r) => ({...r.data, id:r.id, role:r.role, active:r.active, createdAt:r.created_at})));
+    setTickets(results[1].data.map((r) => ({...r.data, id:r.id})));
+    setNotifications(results[2].data.map((r) => ({...r.data, id:r.id})));
+    setEmailLogs(results[3].data.map((r) => ({...r.data, id:r.id})));
+    setSettings({...DEFAULT_SETTINGS, ...(results[4].data?.data || {})});
+  }, [authUser?.id]);
+
   useEffect(() => {
-    if (!HAS_FIREBASE || !firebaseDb || !fbAuthUser) return;
-
-    const unsubs = [];
-
-    try {
-      const usersRef = collection(
-        firebaseDb,
-        'artifacts',
-        APP_ID,
-        'public',
-        'data',
-        'mktdesk_users'
-      );
-      unsubs.push(
-        onSnapshot(
-          usersRef,
-          (snap) => {
-            if (!snap.empty) {
-              const list = snap.docs.map((d) => d.data());
-              setUsers(list);
-            }
-          },
-          (err) => console.warn('Sync users:', err)
-        )
-      );
-
-      const ticketsRef = collection(
-        firebaseDb,
-        'artifacts',
-        APP_ID,
-        'public',
-        'data',
-        'mktdesk_tickets'
-      );
-      unsubs.push(
-        onSnapshot(
-          ticketsRef,
-          (snap) => {
-            if (!snap.empty) {
-              const list = snap.docs.map((d) => d.data());
-              setTickets(list);
-            }
-          },
-          (err) => console.warn('Sync tickets:', err)
-        )
-      );
-
-      const notifRef = collection(
-        firebaseDb,
-        'artifacts',
-        APP_ID,
-        'public',
-        'data',
-        'mktdesk_notifications'
-      );
-      unsubs.push(
-        onSnapshot(
-          notifRef,
-          (snap) => {
-            if (!snap.empty) {
-              const list = snap.docs.map((d) => d.data());
-              setNotifications(list);
-            }
-          },
-          (err) => console.warn('Sync notifications:', err)
-        )
-      );
-
-      const logsRef = collection(
-        firebaseDb,
-        'artifacts',
-        APP_ID,
-        'public',
-        'data',
-        'mktdesk_emaillogs'
-      );
-      unsubs.push(
-        onSnapshot(
-          logsRef,
-          (snap) => {
-            if (!snap.empty) {
-              const list = snap.docs.map((d) => d.data());
-              setEmailLogs(list);
-            }
-          },
-          (err) => console.warn('Sync emailLogs:', err)
-        )
-      );
-
-      const cfgDoc = doc(
-        firebaseDb,
-        'artifacts',
-        APP_ID,
-        'public',
-        'data',
-        'mktdesk_config',
-        'main'
-      );
-      unsubs.push(
-        onSnapshot(
-          cfgDoc,
-          (snap) => {
-            if (snap.exists()) {
-              setSettings((prev) => ({ ...prev, ...snap.data() }));
-            }
-          },
-          (err) => console.warn('Sync settings:', err)
-        )
-      );
-    } catch (err) {
-      console.warn('Erro ao registrar listeners Firestore:', err);
+    if (!authUser || !supabaseConfigured) {
+      setUsers([]); setTickets([]); setNotifications([]); setEmailLogs([]);
+      return;
     }
+    reloadData();
+    // Cada alteração relevante atualiza os painéis abertos sem recarregar a página.
+    const channel = supabase.channel('mktdesk-sync')
+      .on('postgres_changes', { event:'*', schema:'public', table:'profiles' }, reloadData)
+      .on('postgres_changes', { event:'*', schema:'public', table:'tickets' }, reloadData)
+      .on('postgres_changes', { event:'*', schema:'public', table:'notifications' }, reloadData)
+      .on('postgres_changes', { event:'*', schema:'public', table:'email_logs' }, reloadData)
+      .on('postgres_changes', { event:'*', schema:'public', table:'app_settings' }, reloadData)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [authUser?.id, reloadData]);
 
-    return () => unsubs.forEach((fn) => fn && fn());
-  }, [fbAuthUser]);
+  const saveRecord = useCallback(async (table, value, extras = {}) => {
+    if (!supabaseConfigured || !authUser) throw new Error('Faça login no Supabase para salvar.');
+    const { error } = await supabase.from(table).upsert({id:value.id, data:value, ...extras}, {onConflict:'id'});
+    if (error) { setDataError(error.message); throw error; }
+    await reloadData();
+  }, [authUser, reloadData]);
 
-  // Helpers de escrita dupla (Estado local imediato + Firestore quando ativo)
-  const persistUserDoc = useCallback(
-    async (userObj) => {
-      setUsers((prev) => {
-        const exists = prev.some((u) => u.id === userObj.id);
-        return exists
-          ? prev.map((u) => (u.id === userObj.id ? userObj : u))
-          : [...prev, userObj];
-      });
-      if (HAS_FIREBASE && firebaseDb && fbAuthUser) {
-        try {
-          await setDoc(
-            doc(
-              firebaseDb,
-              'artifacts',
-              APP_ID,
-              'public',
-              'data',
-              'mktdesk_users',
-              userObj.id
-            ),
-            userObj
-          );
-        } catch (err) {
-          console.warn('Firestore save user:', err);
-        }
-      }
-    },
-    [fbAuthUser]
-  );
-
-  const persistTicketDoc = useCallback(
-    async (ticketObj) => {
-      setTickets((prev) => {
-        const exists = prev.some((t) => t.id === ticketObj.id);
-        return exists
-          ? prev.map((t) => (t.id === ticketObj.id ? ticketObj : t))
-          : [ticketObj, ...prev];
-      });
-      if (HAS_FIREBASE && firebaseDb && fbAuthUser) {
-        try {
-          await setDoc(
-            doc(
-              firebaseDb,
-              'artifacts',
-              APP_ID,
-              'public',
-              'data',
-              'mktdesk_tickets',
-              ticketObj.id
-            ),
-            ticketObj
-          );
-        } catch (err) {
-          console.warn('Firestore save ticket:', err);
-        }
-      }
-    },
-    [fbAuthUser]
-  );
-
-  const persistNotificationDoc = useCallback(
-    async (notifObj) => {
-      setNotifications((prev) => {
-        const exists = prev.some((n) => n.id === notifObj.id);
-        return exists
-          ? prev.map((n) => (n.id === notifObj.id ? notifObj : n))
-          : [notifObj, ...prev];
-      });
-      if (HAS_FIREBASE && firebaseDb && fbAuthUser) {
-        try {
-          await setDoc(
-            doc(
-              firebaseDb,
-              'artifacts',
-              APP_ID,
-              'public',
-              'data',
-              'mktdesk_notifications',
-              notifObj.id
-            ),
-            notifObj
-          );
-        } catch (err) {
-          console.warn('Firestore save notification:', err);
-        }
-      }
-    },
-    [fbAuthUser]
-  );
-
-  const persistEmailLogDoc = useCallback(
-    async (logObj) => {
-      setEmailLogs((prev) => [logObj, ...prev]);
-      if (HAS_FIREBASE && firebaseDb && fbAuthUser) {
-        try {
-          await setDoc(
-            doc(
-              firebaseDb,
-              'artifacts',
-              APP_ID,
-              'public',
-              'data',
-              'mktdesk_emaillogs',
-              logObj.id
-            ),
-            logObj
-          );
-        } catch (err) {
-          console.warn('Firestore save emailLog:', err);
-        }
-      }
-    },
-    [fbAuthUser]
-  );
-
-  const persistSettingsDoc = useCallback(
-    async (newSettings) => {
-      setSettings(newSettings);
-      if (HAS_FIREBASE && firebaseDb && fbAuthUser) {
-        try {
-          await setDoc(
-            doc(
-              firebaseDb,
-              'artifacts',
-              APP_ID,
-              'public',
-              'data',
-              'mktdesk_config',
-              'main'
-            ),
-            newSettings
-          );
-        } catch (err) {
-          console.warn('Firestore save settings:', err);
-        }
-      }
-    },
-    [fbAuthUser]
-  );
+  const persistUserDoc = useCallback(async (userObj) => {
+    // Gerenciamento de papéis é protegido pelas políticas RLS no Supabase.
+    const {passwordHash: _ignored, ...safe} = userObj;
+    if (!users.some((u) => u.id === safe.id)) {
+      throw new Error('A pessoa precisa criar sua conta antes de receber uma função.');
+    }
+    const { error } = await supabase.from('profiles').update({
+      role:safe.role, active:safe.active !== false, data:safe
+    }).eq('id', safe.id);
+    if (error) { setDataError(error.message); throw error; }
+    await reloadData();
+  }, [users, reloadData]);
+  const persistTicketDoc = useCallback(async (obj) => {
+    await saveRecord('tickets', obj, {requester_id:obj.requesterId});
+  }, [saveRecord]);
+  const persistNotificationDoc = useCallback(async (obj) => {
+    await saveRecord('notifications', obj, {user_id:obj.userId});
+  }, [saveRecord]);
+  const persistEmailLogDoc = useCallback(async (obj) => {
+    await saveRecord('email_logs', obj);
+  }, [saveRecord]);
+  const persistSettingsDoc = useCallback(async (obj) => {
+    // Chaves privadas de serviços externos NÃO podem ficar no frontend.
+    const {webhookSecret:_secret, webhookUrl:_url, ...publicSettings} = obj;
+    const {error} = await supabase.from('app_settings').upsert({id:1, data:publicSettings});
+    if (error) { setDataError(error.message); throw error; }
+    await reloadData();
+  }, [reloadData]);
 
   /**
    * --------------------------------------------------------------------------
@@ -1108,7 +830,7 @@ export default function App() {
         };
 
         let deliveryStatus = 'Registrado (Webhook não configurado)';
-        if (settings.webhookUrl && settings.webhookUrl.trim()) {
+        if (false) { // Desativado: configurar envio na Edge Function, não expor secrets no browser.
           try {
             const headers = { 'Content-Type': 'application/json' };
             if (settings.webhookSecret && settings.webhookSecret.trim()) {
@@ -1707,38 +1429,19 @@ export default function App() {
    * RENDERIZAÇÃO: TELA DE AUTENTICAÇÃO / PRIMEIRO ACESSO
    * ==========================================================================
    */
+  if (authLoading) return <div className="p-8 text-center">Verificando sessão do Supabase…</div>;
+  if (!supabaseConfigured) return <div className="p-8 max-w-lg mx-auto"><h1 className="font-bold">Supabase não configurado</h1><p>Adicione VITE_SUPABASE_URL e VITE_SUPABASE_PUBLISHABLE_KEY na Vercel e publique novamente.</p></div>;
   if (!currentUser) {
     return (
       <>
-        <AuthScreen
-          users={users}
-          settings={settings}
-          onRegisterUser={async (newUser) => {
-            await persistUserDoc(newUser);
-            setCurrentUserId(newUser.id);
-            showFloatingPopup({
-              title:
-                newUser.role === 'admin'
-                  ? 'Administrador Master Configurado!'
-                  : `Bem-vindo(a), ${newUser.name}!`,
-              message:
-                newUser.role === 'admin'
-                  ? 'Ambiente de produção pronto para uso corporativo.'
-                  : 'Sua conta corporativa foi criada com sucesso.',
-              type: 'success'
-            });
-          }}
-          onLoginSuccess={(user) => {
-            setCurrentUserId(user.id);
-            showFloatingPopup({
-              title: `Olá, ${user.name}`,
-              message: `Sessão iniciada como ${ROLE_META[user.role]?.label}.`,
-              type: 'info'
-            });
-          }}
-          canInstallPWA={Boolean(deferredInstallPrompt) || (isIOSDevice && !isStandalonePWA)}
-          onInstallPWA={triggerPWAInstall}
-        />
+        {dataError && <p className="text-red-700 bg-red-50 p-3 text-sm">{dataError}</p>}
+        {authUser ? (
+          <div className="min-h-screen flex flex-col gap-4 items-center justify-center p-6 text-center">
+            <h1 className="text-2xl font-bold">Preparando seu acesso</h1>
+            <p>Seu perfil não está disponível ou foi bloqueado. Se acabou de confirmar o e-mail, atualize a página.</p>
+            <button className="text-indigo-700 underline" onClick={() => supabase.auth.signOut()}>Sair</button>
+          </div>
+        ) : <AuthScreen />}
         <ToastPopups
           popups={popups}
           onDismiss={(id) => setPopups((prev) => prev.filter((p) => p.id !== id))}
@@ -1773,8 +1476,8 @@ export default function App() {
         soundEnabled={soundEnabled}
         onToggleSound={() => setSoundEnabled((v) => !v)}
         onOpenNotifications={() => setShowNotificationsDrawer((v) => !v)}
-        onLogout={() => {
-          setCurrentUserId(null);
+        onLogout={async () => {
+          await supabase.auth.signOut();
           setActiveTicketId(null);
           setShowNotificationsDrawer(false);
         }}
@@ -2156,442 +1859,50 @@ export default function App() {
  * TELA DE AUTENTICAÇÃO REAL & PRIMEIRO ACESSO MASTER
  * ============================================================================
  */
-function AuthScreen({
-  users,
-  settings,
-  onRegisterUser,
-  onLoginSuccess,
-  canInstallPWA,
-  onInstallPWA
-}) {
-  const isFirstAccess = users.length === 0;
-  const [mode, setMode] = useState(isFirstAccess ? 'register' : 'login');
-
-  useEffect(() => {
-    if (isFirstAccess) setMode('register');
-  }, [isFirstAccess]);
-
-  // Campos de Login
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [showLoginPass, setShowLoginPass] = useState(false);
-
-  // Campos de Cadastro
-  const [name, setName] = useState('');
+function AuthScreen() {
+  const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
-  const [department, setDepartment] = useState(
-    isFirstAccess ? 'Marketing' : 'Comercial & Vendas'
-  );
-  const [jobTitle, setJobTitle] = useState(
-    isFirstAccess ? 'Gestor(a) de Marketing' : ''
-  );
   const [password, setPassword] = useState('');
-  const [showRegPass, setShowRegPass] = useState(false);
-  const [selectedRole, setSelectedRole] = useState('solicitante');
-  const [inviteCode, setInviteCode] = useState('');
-
-  const [errorMsg, setErrorMsg] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const validateDomain = (emailStr) => {
-    const allowedRaw = (settings.allowedDomains || '').trim();
-    if (!allowedRaw) return true;
-    const domains = allowedRaw
-      .split(',')
-      .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
-      .filter(Boolean);
-    if (domains.length === 0) return true;
-    const emailDomain = emailStr.split('@')[1]?.toLowerCase() || '';
-    return domains.includes(emailDomain);
-  };
-
-  const handleLoginSubmit = (e) => {
-    e.preventDefault();
-    setErrorMsg('');
-    const normalizedEmail = loginEmail.trim().toLowerCase();
-    if (!normalizedEmail || !loginPassword) {
-      setErrorMsg('Preencha seu e-mail corporativo e senha.');
-      return;
-    }
-
-    const found = users.find(
-      (u) => u.email.toLowerCase() === normalizedEmail
-    );
-    if (!found) {
-      setErrorMsg('E-mail não encontrado. Verifique ou crie sua conta.');
-      return;
-    }
-    if (found.active === false) {
-      setErrorMsg(
-        'Sua conta está bloqueada. Entre em contato com o Admin do Marketing.'
-      );
-      return;
-    }
-    if (found.passwordHash !== hashPassword(loginPassword)) {
-      setErrorMsg('Senha incorreta. Tente novamente.');
-      return;
-    }
-
-    onLoginSuccess(found);
-  };
-
-  const handleRegisterSubmit = async (e) => {
-    e.preventDefault();
-    setErrorMsg('');
-
-    const cleanName = name.trim();
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanTitle = jobTitle.trim();
-
-    if (!cleanName || !cleanEmail || !cleanTitle || !password) {
-      setErrorMsg('Preencha todos os campos obrigatórios.');
-      return;
-    }
-    if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
-      setErrorMsg('Informe um endereço de e-mail corporativo válido.');
-      return;
-    }
-    if (!validateDomain(cleanEmail)) {
-      setErrorMsg(
-        `Apenas e-mails dos domínios autorizados (${settings.allowedDomains}) são permitidos.`
-      );
-      return;
-    }
-    if (password.length < 6) {
-      setErrorMsg('A senha deve ter no mínimo 6 caracteres.');
-      return;
-    }
-    if (users.some((u) => u.email.toLowerCase() === cleanEmail)) {
-      setErrorMsg('Já existe uma conta cadastrada com este e-mail.');
-      return;
-    }
-
-    let finalRole = 'solicitante';
-    if (isFirstAccess) {
-      finalRole = 'admin';
-    } else if (selectedRole === 'tecnico') {
-      if (inviteCode.trim() !== (settings.techInviteCode || '').trim()) {
-        setErrorMsg(
-          'Código de Convite inválido para Técnico do Marketing.'
-        );
-        return;
-      }
-      finalRole = 'tecnico';
-    } else if (selectedRole === 'admin') {
-      if (inviteCode.trim() !== (settings.adminInviteCode || '').trim()) {
-        setErrorMsg(
-          'Código de Convite inválido para Administrador do Marketing.'
-        );
-        return;
-      }
-      finalRole = 'admin';
-    }
-
-    setSubmitting(true);
+  const [name, setName] = useState('');
+  const [department, setDepartment] = useState('Marketing');
+  const [jobTitle, setJobTitle] = useState('');
+  const [notice, setNotice] = useState('');
+  const [pending, setPending] = useState(false);
+  async function submit(e) {
+    e.preventDefault(); setNotice(''); setPending(true);
     try {
-      const newUser = {
-        id: generateId('usr'),
-        name: cleanName,
-        email: cleanEmail,
-        department: isFirstAccess ? department || 'Marketing' : department,
-        jobTitle: cleanTitle,
-        role: finalRole,
-        passwordHash: hashPassword(password),
-        active: true,
-        createdAt: new Date().toISOString()
-      };
-      await onRegisterUser(newUser);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex flex-col justify-center px-4 py-8 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full mx-auto">
-        {/* Cabeçalho da Marca */}
-        <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 mb-3">
-            <Sparkles className="w-7 h-7" />
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-            MktDesk
-          </h1>
-          <p className="text-sm text-indigo-200 mt-1">
-            Central de Demandas de Marketing • GLPI Corporativo
-          </p>
-
-          {canInstallPWA && (
-            <button
-              type="button"
-              onClick={onInstallPWA}
-              className="mt-3 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-indigo-100 text-xs font-medium border border-white/15 transition"
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              Instalar Aplicativo no Dispositivo
-            </button>
-          )}
-        </div>
-
-        {/* Cartão Principal */}
-        <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/80 overflow-hidden">
-          {isFirstAccess ? (
-            <div className="bg-gradient-to-r from-indigo-600 to-violet-600 px-6 py-4 text-white">
-              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-indigo-100">
-                <ShieldCheck className="w-4 h-4" />
-                Configuração Inicial • Primeiro Acesso
-              </div>
-              <p className="text-sm mt-1 text-white/95 leading-relaxed">
-                Nenhum usuário cadastrado ainda. O primeiro cadastro criará
-                automaticamente o{' '}
-                <strong className="font-bold underline">
-                  Administrador Master do Marketing
-                </strong>
-                .
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 border-b border-slate-200 bg-slate-50 p-1.5 gap-1.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setMode('login');
-                  setErrorMsg('');
-                }}
-                className={`py-2.5 text-sm font-semibold rounded-xl transition ${
-                  mode === 'login'
-                    ? 'bg-white text-indigo-700 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Entrar
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMode('register');
-                  setErrorMsg('');
-                }}
-                className={`py-2.5 text-sm font-semibold rounded-xl transition ${
-                  mode === 'register'
-                    ? 'bg-white text-indigo-700 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Criar Conta
-              </button>
-            </div>
-          )}
-
-          <div className="p-6 sm:p-7">
-            {errorMsg && (
-              <div className="mb-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
-
-            {mode === 'login' && !isFirstAccess ? (
-              <form onSubmit={handleLoginSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                    E-mail Corporativo
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    placeholder="seu.nome@empresa.com.br"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Senha
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showLoginPass ? 'text' : 'password'}
-                      required
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowLoginPass((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    >
-                      {showLoginPass ? (
-                        <EyeOff className="w-4 h-4" />
-                      ) : (
-                        <Eye className="w-4 h-4" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm shadow-md shadow-indigo-600/20 transition"
-                >
-                  Acessar Plataforma
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                    Nome Completo *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Ex: Ana Paula Ferreira"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                    E-mail Corporativo *
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder={
-                      settings.allowedDomains
-                        ? `nome@${settings.allowedDomains.split(',')[0].trim().replace(/^@/, '')}`
-                        : 'nome@suaempresa.com.br'
-                    }
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                      Departamento *
-                    </label>
-                    <select
-                      value={department}
-                      onChange={(e) => setDepartment(e.target.value)}
-                      className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      {DEPARTMENTS.map((dept) => (
-                        <option key={dept} value={dept}>
-                          {dept}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                      Cargo *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={jobTitle}
-                      onChange={(e) => setJobTitle(e.target.value)}
-                      placeholder="Ex: Analista Comercial"
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                    Senha de Acesso (mín. 6 caracteres) *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showRegPass ? 'text' : 'password'}
-                      required
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Crie uma senha segura"
-                      className="w-full px-3.5 py-2.5 pr-10 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowRegPass((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    >
-                      {showRegPass ? (
-                        <EyeOff className="w-4 h-4" />
-                      ) : (
-                        <Eye className="w-4 h-4" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-
-                {!isFirstAccess && (
-                  <>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                        Perfil de Acesso
-                      </label>
-                      <select
-                        value={selectedRole}
-                        onChange={(e) => setSelectedRole(e.target.value)}
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      >
-                        <option value="solicitante">
-                          Solicitante (Abrir e acompanhar demandas)
-                        </option>
-                        <option value="tecnico">
-                          Técnico do Marketing (Requer Código de Convite)
-                        </option>
-                        <option value="admin">
-                          Admin do Marketing (Requer Código de Convite)
-                        </option>
-                      </select>
-                    </div>
-
-                    {(selectedRole === 'tecnico' || selectedRole === 'admin') && (
-                      <div className="p-3 rounded-xl bg-indigo-50/70 border border-indigo-200">
-                        <label className="block text-xs font-semibold text-indigo-900 uppercase tracking-wider mb-1">
-                          Código de Convite Corporativo *
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={inviteCode}
-                          onChange={(e) => setInviteCode(e.target.value)}
-                          placeholder="Informe o código fornecido pelo Admin"
-                          className="w-full px-3 py-2 rounded-lg border border-indigo-300 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
-                      </div>
-                    )}
-                  </>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-semibold text-sm shadow-md shadow-indigo-600/20 transition mt-2"
-                >
-                  {isFirstAccess
-                    ? 'Criar Administrador Master e Iniciar'
-                    : 'Concluir Cadastro e Entrar'}
-                </button>
-              </form>
-            )}
-          </div>
-        </div>
-      </div>
+      if (mode === 'login') {
+        const {error} = await supabase.auth.signInWithPassword({email:email.trim(),password});
+        if (error) throw error;
+      } else if (mode === 'register') {
+        const {data,error} = await supabase.auth.signUp({
+          email:email.trim().toLowerCase(), password,
+          options:{data:{name:name.trim(), department, jobTitle:jobTitle.trim()}}
+        });
+        if (error) throw error;
+        setNotice(data.session ? 'Conta criada. Entrando…' : 'Cadastro recebido. Verifique seu e-mail para confirmar a conta. O administrador poderá atribuir sua função.');
+      } else {
+        const {error} = await supabase.auth.resetPasswordForEmail(email.trim());
+        if (error) throw error;
+        setNotice('Se o e-mail estiver cadastrado, você receberá instruções de recuperação.');
+      }
+    } catch(err) {setNotice(err.message || 'Não foi possível concluir a operação.');}
+    finally {setPending(false);}
+  }
+  return <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
+    <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-7 space-y-5">
+      <div className="text-center"><div className="mx-auto mb-3 w-14 h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center"><Sparkles /></div><h1 className="text-2xl font-bold">MktDesk</h1><p className="text-sm text-slate-500">Central de Demandas de Marketing</p></div>
+      <div className="flex gap-2 justify-center text-sm">{[['login','Entrar'],['register','Cadastrar'],['reset','Recuperar senha']].map(([value,label])=><button key={value} type="button" onClick={()=>{setMode(value);setNotice('');}} className={'px-3 py-2 rounded-lg '+(mode===value?'bg-indigo-600 text-white':'bg-slate-100')}>{label}</button>)}</div>
+      <form onSubmit={submit} className="space-y-3">
+        {mode==='register'&&<><input className="w-full border rounded-lg p-3" placeholder="Nome completo" required value={name} onChange={e=>setName(e.target.value)}/><select className="w-full border rounded-lg p-3" value={department} onChange={e=>setDepartment(e.target.value)}>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select><input className="w-full border rounded-lg p-3" placeholder="Cargo" required value={jobTitle} onChange={e=>setJobTitle(e.target.value)}/></>}
+        <input className="w-full border rounded-lg p-3" type="email" placeholder="E-mail corporativo" required value={email} onChange={e=>setEmail(e.target.value)}/>
+        {mode!=='reset'&&<input className="w-full border rounded-lg p-3" type="password" minLength={8} placeholder="Senha (mínimo 8 caracteres)" required value={password} onChange={e=>setPassword(e.target.value)}/>}
+        {notice&&<p role="status" className="text-sm text-indigo-800 bg-indigo-50 p-3 rounded-lg">{notice}</p>}
+        <button disabled={pending} className="bg-indigo-600 text-white py-3 rounded-lg w-full font-semibold disabled:opacity-50">{pending?'Processando…':mode==='login'?'Entrar':mode==='register'?'Criar conta':'Enviar recuperação'}</button>
+      </form>
+      <p className="text-xs text-slate-500 text-center">Novas contas recebem o perfil Solicitante. Um administrador pode promover usuários para Técnico ou Admin.</p>
     </div>
-  );
+  </div>;
 }
 
 /**
@@ -3703,42 +3014,7 @@ function AdminTeamManager({
 
   const handleCreateDirectUser = async (e) => {
     e.preventDefault();
-    setFormErr('');
-    const cleanEmail = newEmail.trim().toLowerCase();
-    if (!newName.trim() || !cleanEmail || !newTitle.trim() || !newPass) {
-      setFormErr('Preencha todos os campos obrigatórios.');
-      return;
-    }
-    if (newPass.length < 6) {
-      setFormErr('A senha inicial deve ter no mínimo 6 caracteres.');
-      return;
-    }
-    if (users.some((u) => u.email.toLowerCase() === cleanEmail)) {
-      setFormErr('Já existe um usuário com este e-mail.');
-      return;
-    }
-
-    await onSaveUser({
-      id: generateId('usr'),
-      name: newName.trim(),
-      email: cleanEmail,
-      department: newDept,
-      jobTitle: newTitle.trim(),
-      role: newRole,
-      passwordHash: hashPassword(newPass),
-      active: true,
-      createdAt: new Date().toISOString()
-    });
-
-    setNewName('');
-    setNewEmail('');
-    setNewTitle('');
-    setNewPass('');
-    setShowAddModal(false);
-    onNotify(
-      'Membro Cadastrado',
-      `${newName.trim()} foi adicionado(a) à plataforma.`
-    );
+    setFormErr('Por segurança, peça que a pessoa faça seu cadastro na tela inicial. Depois, selecione a função dela nesta lista. Não é possível criar senha de outra pessoa no navegador.');
   };
 
   return (
