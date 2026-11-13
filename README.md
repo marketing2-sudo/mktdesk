@@ -38,3 +38,21 @@ where id=(select id from auth.users where email='SEU_EMAIL@EMPRESA.COM.BR');
 - `src/supabase.js`: conexão Supabase
 - `supabase/schema.sql`: banco, trigger de cadastro, RLS e Realtime
 - `.env.example`: nomes das variáveis da Vercel
+
+## Novo: Gestão de Serviços e SLAs (versão 0.2)
+
+1. No Supabase **SQL Editor**, execute **`supabase/servicos-sla.sql`**. Já tendo executado `schema.sql`, não precisa executar o original novamente.
+2. Atualize os arquivos desta pasta no GitHub e confira o deploy na Vercel.
+3. Entre como **Administrador** no MktDesk e abra **Configurações**.
+4. Em **Gestão de Serviços e SLAs**, cadastre, edite ou desative serviços. Informe o tempo em **horas corridas**. O prazo de cada chamado é fixado quando ele é criado, portanto alterações futuras no catálogo não mudam o histórico.
+5. Em **Status personalizados**, crie etapas como *Em revisão* ou *Aguardando fornecedor*. Escolha a qual status do fluxo elas pertencem. As etapas **não substituem** os estados operacionais principais (triagem, produção, SAC, aprovação e conclusão), para preservar a lógica de pausa de SLA e aprovação pelo solicitante.
+6. Clique em **Salvar Configurações** no topo da página para persistir no Supabase. Sem esse clique, as alterações ainda não são gravadas.
+7. Abra um chamado e, como Administrador ou Técnico, utilize **Etapa personalizada** no detalhamento. A etapa aparecerá na identificação do chamado, preservando a coluna principal do Kanban.
+8. Teste criando um chamado com um novo serviço. Confira `tickets` no Table Editor do Supabase e veja `data.categoryName` e `data.slaHours`.
+
+### Limitações importantes
+- O SLA atual é **em horas corridas**, não em horas úteis ou por expediente.
+- Etapas personalizadas são **substatus** relacionados a um dos estados principais. Para construir um fluxo totalmente livre com gatilhos de pausa, aprovação, fechamento e permissões por transição, seria necessária uma migração mais abrangente.
+- A funcionalidade de **convites individuais** discutida anteriormente não foi implementada neste pacote. Não considere os códigos da interface antiga como convites seguros.
+- Migração dos chamados existentes e notificações por e-mail não foram alteradas.
+- A sintaxe JSX foi analisada, mas o build completo depende do ambiente Vercel (instalação de dependências indisponível nesta sessão).

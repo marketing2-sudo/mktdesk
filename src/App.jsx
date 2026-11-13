@@ -157,7 +157,9 @@ const DEFAULT_SETTINGS = {
   allowedDomains: '', // Vazio por padrão para permitir uso imediato; configurável pelo Admin
   webhookUrl: '',
   webhookSecret: '',
-  categories: DEFAULT_CATEGORIES
+  categories: DEFAULT_CATEGORIES,
+  // Etapas adicionais permanecem vinculadas ao fluxo principal para preservar SLA e aprovações.
+  customStages: []
 };
 
 const STATUS_META = {
@@ -555,7 +557,7 @@ export default function App() {
     setTickets(results[1].data.map((r) => ({...r.data, id:r.id})));
     setNotifications(results[2].data.map((r) => ({...r.data, id:r.id})));
     setEmailLogs(results[3].data.map((r) => ({...r.data, id:r.id})));
-    setSettings({...DEFAULT_SETTINGS, ...(results[4].data?.data || {})});
+    setSettings({...DEFAULT_SETTINGS, ...(results[4].data?.data || {}), categories:results[4].data?.data?.categories || DEFAULT_CATEGORIES, customStages:results[4].data?.data?.customStages || []});
   }, [authUser?.id]);
 
   useEffect(() => {
@@ -597,6 +599,15 @@ export default function App() {
   const persistTicketDoc = useCallback(async (obj) => {
     await saveRecord('tickets', obj, {requester_id:obj.requesterId});
   }, [saveRecord]);
+  const handleSetCustomStage = async (ticket, stageId) => {
+    if (!currentUser || !['admin','tecnico'].includes(currentUser.role)) return;
+    const stage = (settings.customStages || []).find(x => x.id === stageId && x.active !== false);
+    if (stageId && (!stage || stage.baseStatus !== ticket.status)) return;
+    await persistTicketDoc({
+      ...ticket, customStageId: stageId || null, updatedAt: new Date().toISOString(),
+      timeline: [...(ticket.timeline || []), {id:generateId('msg'),type:'system',authorId:currentUser.id,authorName:currentUser.name,authorRole:currentUser.role,content:stage ? `Etapa definida: ${stage.name}.` : 'Etapa personalizada removida.',createdAt:new Date().toISOString()}]
+    });
+  };
   const persistNotificationDoc = useCallback(async (obj) => {
     await saveRecord('notifications', obj, {user_id:obj.userId});
   }, [saveRecord]);
@@ -894,9 +905,13 @@ export default function App() {
 
   const handleCreateTicket = async (formData) => {
     if (!currentUser) return;
+    if (!settings.categories.some(c => c.id === formData.categoryId && c.active !== false)) {
+      setDataError('Serviço indisponível. Escolha um serviço ativo.');
+      return;
+    }
     const categoryObj =
-      settings.categories.find((c) => c.id === formData.categoryId) ||
-      settings.categories[0] ||
+      settings.categories.find((c) => c.id === formData.categoryId && c.active !== false) ||
+      settings.categories.find(c => c.active !== false) ||
       DEFAULT_CATEGORIES[0];
 
     const protocol = generateNextProtocol();
@@ -1649,6 +1664,7 @@ export default function App() {
                 tickets={tickets}
                 users={users}
                 currentUser={currentUser}
+                customStages={settings.customStages || []}
                 viewMode={viewMode}
                 onChangeViewMode={setViewMode}
                 nowTick={nowTick}
@@ -1741,6 +1757,7 @@ export default function App() {
         {/* ======================= PAINEL TÉCNICO ======================= */}
         {currentUser.role === 'tecnico' && (
           <TechWorkspace
+            customStages={settings.customStages || []}
             tickets={tickets}
             users={users}
             currentUser={currentUser}
@@ -1758,6 +1775,7 @@ export default function App() {
         {/* ===================== PAINEL SOLICITANTE ===================== */}
         {currentUser.role === 'solicitante' && (
           <RequesterPortal
+            customStages={settings.customStages || []}
             tickets={tickets}
             currentUser={currentUser}
             filter={requesterFilter}
@@ -1798,7 +1816,7 @@ export default function App() {
       {showNewTicketModal && (
         <NewTicketModal
           currentUser={currentUser}
-          categories={settings.categories}
+          categories={settings.categories.filter(c => c.active !== false)}
           nextProtocol={generateNextProtocol()}
           onClose={() => setShowNewTicketModal(false)}
           onSubmit={handleCreateTicket}
@@ -1811,6 +1829,8 @@ export default function App() {
           ticket={activeTicket}
           currentUser={currentUser}
           users={users}
+          customStages={settings.customStages || []}
+          onSetCustomStage={(id) => handleSetCustomStage(activeTicket, id)}
           nowTick={nowTick}
           onClose={() => setActiveTicketId(null)}
           onAssignTech={(techId) => handleAssignTech(activeTicket, techId)}
@@ -3313,6 +3333,13 @@ function AdminSettingsPanel({
   onRequestConfirm
 }) {
   const [draft, setDraft] = useState(settings);
+  const [serviceName, setServiceName] = useState('');
+  const [serviceDescription, setServiceDescription] = useState('');
+  const [serviceHours, setServiceHours] = useState('24');
+  const [editingServiceId, setEditingServiceId] = useState(null);
+  const [stageName, setStageName] = useState('');
+  const [stageBase, setStageBase] = useState('em_atendimento');
+  const [editingStageId, setEditingStageId] = useState(null);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -3327,6 +3354,33 @@ function AdminSettingsPanel({
         c.id === catId ? { ...c, slaHours: num } : c
       )
     }));
+  };
+
+  const saveService = () => {
+    const name = serviceName.trim();
+    const hours = Number(serviceHours);
+    if (!name || !Number.isFinite(hours) || hours < 1 || hours > 8760) return;
+    if ((draft.categories || []).some(c => c.name.toLowerCase() === name.toLowerCase() && c.id !== editingServiceId)) return;
+    const next = {id: editingServiceId || `cat-${crypto.randomUUID()}`, name, description: serviceDescription.trim(), slaHours: hours, active: true};
+    setDraft(prev => ({...prev, categories: editingServiceId
+      ? prev.categories.map(c => c.id === editingServiceId ? {...c, ...next} : c)
+      : [...prev.categories, next]}));
+    setServiceName(''); setServiceDescription(''); setServiceHours('24'); setEditingServiceId(null);
+  };
+  const editService = (cat) => {
+    setEditingServiceId(cat.id); setServiceName(cat.name);
+    setServiceDescription(cat.description || ''); setServiceHours(String(cat.slaHours));
+  };
+  const saveStage = () => {
+    const name = stageName.trim();
+    if (!name) return;
+    const current = draft.customStages || [];
+    if (current.some(x => x.name.toLowerCase() === name.toLowerCase() && x.id !== editingStageId)) return;
+    const value = {id: editingStageId || `stage-${crypto.randomUUID()}`, name, baseStatus: stageBase, active: true};
+    setDraft(prev => ({...prev, customStages: editingStageId
+      ? (prev.customStages || []).map(x => x.id === editingStageId ? {...x,...value} : x)
+      : [...(prev.customStages || []),value]}));
+    setStageName(''); setStageBase('em_atendimento'); setEditingStageId(null);
   };
 
   const handleDownloadBackup = () => {
@@ -3544,46 +3598,49 @@ function AdminSettingsPanel({
         </div>
       </div>
 
-      {/* Tabela de SLAs por Categoria */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
-        <h3 className="text-sm font-bold text-slate-900 mb-1">
-          Catálogo de Serviços & SLAs por Categoria (em horas úteis/corridas)
-        </h3>
-        <p className="text-xs text-slate-500 mb-4">
-          Define o prazo padrão exibido ao solicitante na abertura da demanda.
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {draft.categories.map((cat) => (
-            <div
-              key={cat.id}
-              className="p-3.5 rounded-xl border border-slate-200 flex items-center justify-between gap-3"
-            >
-              <div className="min-w-0">
-                <div className="font-bold text-xs sm:text-sm text-slate-900">
-                  {cat.name}
-                </div>
-                <div className="text-[11px] text-slate-500 truncate">
-                  {cat.description}
-                </div>
+      {/* Catálogo editável: salvo no registro app_settings, protegido por RLS de admin. */}
+      <section className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+        <div>
+          <h3 className="text-lg font-bold text-slate-900">Gestão de Serviços e SLAs</h3>
+          <p className="text-xs text-slate-500">Cadastre serviços e os prazos em horas corridas. Mudanças de prazo afetam novos chamados, não os anteriores.</p>
+        </div>
+        <div className="space-y-2">
+          {(draft.categories || []).map(cat => (
+            <div key={cat.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold">{cat.name} {cat.active === false ? '(Inativo)' : ''}</p>
+                <p className="text-xs text-slate-500">{cat.description || 'Sem descrição'} · SLA: {cat.slaHours}h</p>
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <input
-                  type="number"
-                  min="1"
-                  max="720"
-                  value={cat.slaHours}
-                  onChange={(e) =>
-                    handleCategorySlaChange(cat.id, e.target.value)
-                  }
-                  className="w-16 px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-bold text-right tabular-nums"
-                />
-                <span className="text-xs font-semibold text-slate-500">h</span>
-              </div>
+              <button type="button" className="text-xs text-indigo-700 font-semibold" onClick={() => editService(cat)}>Editar</button>
+              <button type="button" className="text-xs text-slate-600 font-semibold" onClick={() => setDraft(prev => ({...prev,categories:prev.categories.map(c => c.id === cat.id ? {...c,active:cat.active === false} : c)}))}>{cat.active === false ? 'Ativar' : 'Desativar'}</button>
             </div>
           ))}
         </div>
-      </div>
+        <form onSubmit={e => {e.preventDefault(); saveService();}} className="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
+          <label className="text-xs font-semibold">Serviço<input required maxLength={100} className="block mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" value={serviceName} onChange={e=>setServiceName(e.target.value)} placeholder="Ex.: Edição de vídeo"/></label>
+          <label className="text-xs font-semibold">Descrição<input maxLength={250} className="block mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" value={serviceDescription} onChange={e=>setServiceDescription(e.target.value)} placeholder="Opcional"/></label>
+          <label className="text-xs font-semibold">Prazo (horas corridas)<input required min="1" max="8760" type="number" className="block mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" value={serviceHours} onChange={e=>setServiceHours(e.target.value)}/></label>
+          <div className="flex gap-2"><button type="submit" className="rounded-lg bg-indigo-600 text-white px-3 py-2 text-xs font-bold">{editingServiceId ? 'Atualizar' : 'Adicionar serviço'}</button>{editingServiceId && <button type="button" onClick={()=>{setEditingServiceId(null);setServiceName('');setServiceDescription('');setServiceHours('24')}} className="text-xs">Cancelar</button>}</div>
+        </form>
+        <p className="text-xs text-amber-700 font-semibold">Para gravar as alterações no Supabase, clique em “Salvar Configurações” no início desta página.</p>
+      </section>
+      <section className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+        <h3 className="text-lg font-bold text-slate-900">Status personalizados</h3>
+        <p className="text-xs text-slate-500">Crie etapas específicas vinculadas ao status principal. As ações de pausa, aprovação e conclusão continuam no fluxo padrão, preservando a contagem do SLA.</p>
+        {(draft.customStages || []).map(stage => (
+          <div key={stage.id} className="flex gap-3 items-center rounded-xl border border-slate-200 p-3">
+            <div className="flex-1"><p className="text-sm font-semibold">{stage.name} {stage.active === false ? '(Inativo)' : ''}</p><p className="text-xs text-slate-500">Fluxo: {STATUS_META[stage.baseStatus]?.label || stage.baseStatus}</p></div>
+            <button type="button" className="text-indigo-700 text-xs" onClick={()=>{setEditingStageId(stage.id);setStageName(stage.name);setStageBase(stage.baseStatus)}}>Editar</button>
+            <button type="button" className="text-slate-600 text-xs" onClick={()=>setDraft(prev=>({...prev,customStages:(prev.customStages||[]).map(x=>x.id===stage.id?{...x,active:stage.active===false}:x)}))}>{stage.active === false ? 'Ativar' : 'Desativar'}</button>
+          </div>
+        ))}
+        <form onSubmit={e=>{e.preventDefault();saveStage();}} className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
+          <label className="text-xs font-semibold">Nome do status<input required maxLength={80} className="block mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" value={stageName} onChange={e=>setStageName(e.target.value)} placeholder="Ex.: Em revisão de arte"/></label>
+          <label className="text-xs font-semibold">Vincular ao fluxo<select className="block mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" value={stageBase} onChange={e=>setStageBase(e.target.value)}>{['novo','em_atendimento','aguardando_solicitante','em_aprovacao'].map(k=><option key={k} value={k}>{STATUS_META[k].label}</option>)}</select></label>
+          <div className="flex gap-2"><button type="submit" className="rounded-lg bg-indigo-600 text-white px-3 py-2 text-xs font-bold">{editingStageId ? 'Atualizar' : 'Adicionar status'}</button>{editingStageId && <button type="button" className="text-xs" onClick={()=>{setEditingStageId(null);setStageName('');setStageBase('em_atendimento')}}>Cancelar</button>}</div>
+        </form>
+        <p className="text-xs text-amber-700 font-semibold">Clique em “Salvar Configurações” para persistir as alterações.</p>
+      </section>
 
       {/* Caixa de Saída Real de E-mails & Webhooks */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
@@ -3644,6 +3701,7 @@ function AdminSettingsPanel({
  * ============================================================================
  */
 function TechWorkspace({
+  customStages = [],
   tickets,
   users,
   currentUser,
@@ -3721,6 +3779,7 @@ function TechWorkspace({
         title={titles[techQueue].title}
         subtitle={titles[techQueue].subtitle}
         tickets={queueTickets}
+        customStages={customStages}
         users={users}
         currentUser={currentUser}
         viewMode={viewMode}
@@ -3740,6 +3799,7 @@ function TechWorkspace({
  * ============================================================================
  */
 function TicketBoardView({
+  customStages = [],
   title,
   subtitle,
   tickets,
@@ -3944,7 +4004,7 @@ function TicketBoardView({
                     <span
                       className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${st.badgeClass}`}
                     >
-                      {st.label}
+                      {st.label}{customStages.find(x=>x.id===t.customStageId && x.baseStatus===t.status)?.name ? ` · ${customStages.find(x=>x.id===t.customStageId).name}` : ''}
                     </span>
                     <span
                       className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border ${pr.badgeClass}`}
@@ -4066,6 +4126,7 @@ function TicketBoardView({
                           <div className="text-xs font-bold text-slate-900 line-clamp-2">
                             {t.title}
                           </div>
+                          {customStages.find(x=>x.id===t.customStageId && x.baseStatus===t.status) && <div className="text-[11px] text-indigo-700 font-semibold">{customStages.find(x=>x.id===t.customStageId).name}</div>}
                           <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
                             <span className="truncate max-w-[130px]">
                               {t.department}
@@ -4094,6 +4155,7 @@ function TicketBoardView({
  * ============================================================================
  */
 function RequesterPortal({
+  customStages = [],
   tickets,
   currentUser,
   filter,
@@ -4300,7 +4362,7 @@ function RequesterPortal({
                     <span
                       className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${st.badgeClass}`}
                     >
-                      {st.label}
+                      {st.label}{customStages.find(x=>x.id===t.customStageId && x.baseStatus===t.status)?.name ? ` · ${customStages.find(x=>x.id===t.customStageId).name}` : ''}
                     </span>
                   </div>
 
@@ -4564,6 +4626,8 @@ function TicketDetailModal({
   ticket,
   currentUser,
   users,
+  customStages = [],
+  onSetCustomStage,
   nowTick,
   onClose,
   onAssignTech,
@@ -4579,6 +4643,7 @@ function TicketDetailModal({
   const isRequester = currentUser.id === ticket.requesterId;
 
   const sla = calculateTicketSLA(ticket, nowTick);
+  const stage = customStages.find(x => x.id === ticket.customStageId);
   const st = STATUS_META[ticket.status] || STATUS_META.novo;
 
   // Estados de interação
@@ -4636,7 +4701,7 @@ function TicketDetailModal({
               <span
                 className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${st.badgeClass}`}
               >
-                {st.label}
+                {st.label}{stage ? ` · ${stage.name}` : ''}
               </span>
               <span
                 className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border tabular-nums ${sla.badgeClass}`}
@@ -4736,7 +4801,17 @@ function TicketDetailModal({
             </div>
           </div>
 
-          {/* FLUXO ESPECIAL DO SOLICITANTE: DESTRAVAR SAC */}
+          {isStaff && ticket.status !== 'concluido' && (
+            <div className="bg-white p-4 rounded-2xl border border-slate-200">
+              <label className="block text-xs font-bold text-slate-700 mb-2">Etapa personalizada (opcional)</label>
+              <select className="w-full border border-slate-300 rounded-lg p-2 text-sm" value={customStages.some(x=>x.id===ticket.customStageId && x.active!==false && x.baseStatus===ticket.status) ? ticket.customStageId : ''} onChange={e=>onSetCustomStage(e.target.value)}>
+                <option value="">Sem etapa adicional</option>
+                {customStages.filter(x=>x.active!==false && x.baseStatus===ticket.status).map(x=><option key={x.id} value={x.id}>{x.name}</option>)}
+              </select>
+              <p className="text-xs text-slate-500 mt-1">Use as ações padrão para pausar, aprovar e concluir. Esta etapa não altera o cálculo do SLA.</p>
+            </div>
+          )}
+                    {/* FLUXO ESPECIAL DO SOLICITANTE: DESTRAVAR SAC */}
           {isRequester && ticket.status === 'aguardando_solicitante' && (
             <div className="p-4 sm:p-5 rounded-2xl bg-amber-50 border-2 border-amber-300 space-y-3">
               <div className="flex items-center gap-2 text-amber-950 font-extrabold text-sm">
