@@ -152,6 +152,7 @@ const DEPARTMENTS = [
 ];
 
 const DEFAULT_SETTINGS = {
+  departments: DEPARTMENTS.map(name => ({id:name,name,active:true})),
   allowedDomains: '', // Vazio por padrão para permitir uso imediato; configurável pelo Admin
   categories: DEFAULT_CATEGORIES,
   // Etapas adicionais permanecem vinculadas ao fluxo principal para preservar SLA e aprovações.
@@ -555,7 +556,7 @@ export default function App() {
     setUsers(results[0].data.map((r) => ({...r.data, id:r.id, role:r.role, active:r.active, createdAt:r.created_at})));
     setTickets(results[1].data.map((r) => ({...r.data, id:r.id})));
     setNotifications(results[2].data.map((r) => ({...r.data, id:r.id})));
-    setSettings({...DEFAULT_SETTINGS, ...(results[3].data?.data || {}), categories:results[3].data?.data?.categories || DEFAULT_CATEGORIES, customStages:results[3].data?.data?.customStages || []});
+    setSettings({...DEFAULT_SETTINGS, ...(results[3].data?.data || {}), categories:results[3].data?.data?.categories || DEFAULT_CATEGORIES, customStages:results[3].data?.data?.customStages || [], departments:results[3].data?.data?.departments || DEFAULT_SETTINGS.departments});
   }, [authUser?.id]);
 
   useEffect(() => {
@@ -571,7 +572,7 @@ export default function App() {
       .on('postgres_changes', { event:'*', schema:'public', table:'notifications' }, reloadData)
       .on('postgres_changes', { event:'*', schema:'public', table:'app_settings' }, reloadData)
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    const refresh=()=>reloadData(); const poll=setInterval(refresh,30000); window.addEventListener('focus',refresh); return () => { clearInterval(poll); window.removeEventListener('focus',refresh); supabase.removeChannel(channel); };
   }, [authUser?.id, reloadData]);
 
   const saveRecord = useCallback(async (table, value, extras = {}) => {
@@ -794,7 +795,8 @@ export default function App() {
       categoryName: categoryObj.name,
       slaHours: Number(categoryObj.slaHours || 24),
       priority: formData.priority || 'normal',
-      department: formData.department || currentUser.department || 'Comercial & Vendas',
+      department: formData.department,
+      observerIds: formData.observerIds || [],
       objective: formData.objective.trim(),
       description: formData.description.trim(),
       referenceLink: formData.referenceLink.trim(),
@@ -1621,6 +1623,9 @@ export default function App() {
         <NewTicketModal
           currentUser={currentUser}
           categories={settings.categories.filter(c => c.active !== false)}
+          departments={settings.departments.filter(d=>d.active!==false).map(d=>d.name)}
+          departmentCatalog={settings.departments}
+          users={users}
           nextProtocol={generateNextProtocol()}
           onClose={() => setShowNewTicketModal(false)}
           onSubmit={handleCreateTicket}
@@ -1631,10 +1636,12 @@ export default function App() {
       {activeTicket && (
         <TicketDetailModal
           ticket={activeTicket}
+          departmentCatalog={settings.departments}
           currentUser={currentUser}
           users={users}
           customStages={settings.customStages || []}
           onSetCustomStage={(id) => handleSetCustomStage(activeTicket, id)}
+          onSaveObservers={async ids => {await persistTicketDoc({...activeTicket,observerIds:ids,updatedAt:new Date().toISOString()});}}
           nowTick={nowTick}
           onClose={() => setActiveTicketId(null)}
           onAssignTech={(techId) => handleAssignTech(activeTicket, techId)}
@@ -1694,7 +1701,9 @@ function AuthScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [department, setDepartment] = useState('Marketing');
+  const [department, setDepartment] = useState('');
+  const [departments,setDepartments]=useState([]);
+  useEffect(()=>{supabase.rpc('bd_active_departments').then(({data,error})=>{if(error){setNotice(error.message);return;}setDepartments(data||[]);setDepartment(data?.[0]||'');});},[]);
   const [jobTitle, setJobTitle] = useState('');
   const [notice, setNotice] = useState('');
   const [pending, setPending] = useState(false);
@@ -1705,6 +1714,7 @@ function AuthScreen() {
         const {error} = await supabase.auth.signInWithPassword({email:email.trim(),password});
         if (error) throw error;
       } else if (mode === 'register') {
+        if(!departments.includes(department)) throw new Error('Selecione um departamento ativo.');
         const {data,error} = await supabase.auth.signUp({
           email:email.trim().toLowerCase(), password,
           options:{data:{name:name.trim(), department, jobTitle:jobTitle.trim()}}
@@ -1725,7 +1735,7 @@ function AuthScreen() {
       <div className="text-center"><img src="/logo-bravadesk.svg" alt="BravaDesk" className="mx-auto mb-3 w-16 h-16 rounded-2xl object-contain" /><h1 className="text-2xl font-bold">BravaDesk</h1><p className="text-sm text-slate-500">Central de Serviços e Demandas Corporativas</p></div>
       <div className="flex gap-2 justify-center text-sm">{[['login','Entrar'],['register','Cadastrar'],['reset','Recuperar senha']].map(([value,label])=><button key={value} type="button" onClick={()=>{setMode(value);setNotice('');}} className={'px-3 py-2 rounded-lg '+(mode===value?'bg-indigo-600 text-white':'bg-slate-100')}>{label}</button>)}</div>
       <form onSubmit={submit} className="space-y-3">
-        {mode==='register'&&<><input className="w-full border rounded-lg p-3" placeholder="Nome completo" required value={name} onChange={e=>setName(e.target.value)}/><select className="w-full border rounded-lg p-3" value={department} onChange={e=>setDepartment(e.target.value)}>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select><input className="w-full border rounded-lg p-3" placeholder="Cargo" required value={jobTitle} onChange={e=>setJobTitle(e.target.value)}/></>}
+        {mode==='register'&&<><input className="w-full border rounded-lg p-3" placeholder="Nome completo" required value={name} onChange={e=>setName(e.target.value)}/><select className="w-full border rounded-lg p-3" value={department} onChange={e=>setDepartment(e.target.value)}><option value="" disabled>Selecione o departamento</option>{departments.map(d=><option key={d}>{d}</option>)}</select><input className="w-full border rounded-lg p-3" placeholder="Cargo" required value={jobTitle} onChange={e=>setJobTitle(e.target.value)}/></>}
         <input className="w-full border rounded-lg p-3" type="email" placeholder="E-mail corporativo" required value={email} onChange={e=>setEmail(e.target.value)}/>
         {mode!=='reset'&&<input className="w-full border rounded-lg p-3" type="password" minLength={8} placeholder="Senha (mínimo 8 caracteres)" required value={password} onChange={e=>setPassword(e.target.value)}/>}
         {notice&&<p role="status" className="text-sm text-indigo-800 bg-indigo-50 p-3 rounded-lg">{notice}</p>}
@@ -2204,7 +2214,7 @@ function AdminDashboardBI({
             className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
             <option value="all">Todos os Departamentos</option>
-            {DEPARTMENTS.map((d) => (
+            {[...new Set([...settings.departments.map(d=>d.name),...tickets.map(t=>t.department).filter(Boolean)])].sort().map((d) => (
               <option key={d} value={d}>
                 {d}
               </option>
@@ -2642,6 +2652,8 @@ function AdminSettingsPanel({
   onRequestConfirm
 }) {
   const [draft, setDraft] = useState(settings);
+  const [deptName,setDeptName]=useState('');
+  const [deptEdit,setDeptEdit]=useState(null);
   const [serviceName, setServiceName] = useState('');
   const [serviceDescription, setServiceDescription] = useState('');
   const [serviceHours, setServiceHours] = useState('24');
@@ -2749,6 +2761,11 @@ function AdminSettingsPanel({
 
   return (
     <div className="space-y-6">
+      <section className="bg-white p-5 rounded-2xl border border-slate-200 space-y-3">
+        <h2 className="text-lg font-extrabold">Gestão de Departamentos</h2><p className="text-xs text-slate-500">Departamentos solicitantes do Marketing. Desativar não apaga históricos.</p>
+        {(draft.departments||[]).map(d=><div key={d.id} className="flex items-center gap-2 border-b border-slate-200 py-2"><span className="flex-1 text-sm">{d.name} · {d.active===false?'Inativo':'Ativo'}</span><button type="button" className="text-indigo-600 text-xs" onClick={()=>{setDeptEdit(d.id);setDeptName(d.name)}}>Editar</button><button type="button" className="text-xs border rounded p-2" onClick={()=>setDraft(old=>({...old,departments:old.departments.map(x=>x.id===d.id?{...x,active:x.active===false}:x)}))}>{d.active===false?'Ativar':'Desativar'}</button></div>)}
+        <div className="flex flex-wrap gap-2"><input className="flex-1 border rounded-lg p-2" placeholder="Nome do departamento" value={deptName} onChange={e=>setDeptName(e.target.value)}/><button type="button" disabled={!deptName.trim()||(draft.departments||[]).some(d=>d.id!==deptEdit&&[d.name,...(d.aliases||[])].some(n=>n.toLowerCase()===deptName.trim().toLowerCase()))} className="bg-indigo-600 text-white rounded-lg p-2 disabled:opacity-50" onClick={()=>{setDraft(old=>({...old,departments:deptEdit?old.departments.map(d=>d.id===deptEdit?{...d,name:deptName.trim(),aliases:[...new Set([...(d.aliases||[]),d.name])].filter(n=>n!==deptName.trim())}:d):[...old.departments,{id:crypto.randomUUID(),name:deptName.trim(),active:true}]}));setDeptEdit(null);setDeptName('');}}>{deptEdit?'Aplicar edição':'Adicionar'}</button><button type="button" className="border rounded-lg p-2" onClick={()=>onSaveSettings(draft)}>Salvar departamentos</button></div>
+      </section>
       {/* Segurança, Convites & Domínio Corporativo */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -3362,7 +3379,9 @@ function RequesterPortal({
     [tickets, currentUser.id]
   );
 
+  const observedTickets=tickets.filter(t=>t.requesterId!==currentUser.id && (t.observerIds||[]).includes(currentUser.id));
   const filtered = useMemo(() => {
+    if(filter==='observados') return tickets.filter(t=>t.requesterId!==currentUser.id&&(t.observerIds||[]).includes(currentUser.id));
     if (filter === 'abertos') {
       return myTickets.filter((t) => t.status !== 'concluido');
     }
@@ -3376,7 +3395,7 @@ function RequesterPortal({
       return myTickets.filter((t) => t.status === 'concluido');
     }
     return myTickets;
-  }, [myTickets, filter]);
+  }, [myTickets, filter, tickets,currentUser.id]);
 
   return (
     <div className="space-y-5">
@@ -3482,6 +3501,8 @@ function RequesterPortal({
             count: myTickets.filter((t) => t.status === 'concluido').length
           },
           {
+            id: 'observados', label: 'Chamados que acompanho', count: observedTickets.length
+          }, {
             id: 'todos',
             label: 'Todos',
             count: myTickets.length
@@ -3590,6 +3611,7 @@ function RequesterPortal({
  */
 function NewTicketModal({
   currentUser,
+  departments, departmentCatalog, users,
   categories,
   nextProtocol,
   onClose,
@@ -3599,8 +3621,9 @@ function NewTicketModal({
   const [categoryId, setCategoryId] = useState(categories[0]?.id || '');
   const [priority, setPriority] = useState('normal');
   const [department, setDepartment] = useState(
-    currentUser.department || 'Comercial & Vendas'
+    departments.find(d=>sameDepartment(departmentCatalog,d,currentUser.department))||(departments[0]||'')
   );
+  const [observerIds,setObserverIds]=useState([]);
   const [objective, setObjective] = useState('');
   const [description, setDescription] = useState('');
   const [referenceLink, setReferenceLink] = useState('');
@@ -3612,7 +3635,7 @@ function NewTicketModal({
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!title.trim() || !description.trim()) return;
+    if (!title.trim() || !description.trim() || !departments.includes(department)) return;
     onSubmit({
       title,
       categoryId,
@@ -3620,7 +3643,7 @@ function NewTicketModal({
       department,
       objective,
       description,
-      referenceLink
+      referenceLink, observerIds
     });
   };
 
@@ -3729,10 +3752,10 @@ function NewTicketModal({
               </label>
               <select
                 value={department}
-                onChange={(e) => setDepartment(e.target.value)}
+                onChange={(e) => {setDepartment(e.target.value);setObserverIds([]);}}
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm bg-white"
               >
-                {DEPARTMENTS.map((d) => (
+                {departments.map((d) => (
                   <option key={d} value={d}>
                     {d}
                   </option>
@@ -3754,6 +3777,7 @@ function NewTicketModal({
             </div>
           </div>
 
+          <ObserverPicker users={users} catalog={departmentCatalog} department={department} requesterId={currentUser.id} value={observerIds} onChange={setObserverIds}/>
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Briefing Detalhado & Especificações *
@@ -3811,7 +3835,7 @@ function NewTicketModal({
  * ============================================================================
  */
 function TicketDetailModal({
-  ticket,
+  ticket, onSaveObservers, departmentCatalog,
   currentUser,
   users,
   customStages = [],
@@ -3829,6 +3853,10 @@ function TicketDetailModal({
   const isStaff =
     ['admin','super_admin'].includes(currentUser.role) || currentUser.role === 'tecnico';
   const isRequester = currentUser.id === ticket.requesterId;
+  const [privateNotes,setPrivateNotes]=useState([]);
+  const [observerDraft,setObserverDraft]=useState(ticket.observerIds||[]);
+  useEffect(()=>{setObserverDraft(ticket.observerIds||[]);},[ticket.id,JSON.stringify(ticket.observerIds||[])]);
+  useEffect(()=>{let live=true;setPrivateNotes([]);if(isStaff) supabase.from('bd_private_notes').select('entry').eq('ticket_id',ticket.id).then(({data})=>{if(live)setPrivateNotes((data||[]).map(x=>x.entry));});return()=>{live=false;};},[isStaff,ticket.id,ticket.updatedAt]);
 
   const sla = calculateTicketSLA(ticket, nowTick);
   const stage = customStages.find(x => x.id === ticket.customStageId);
@@ -3860,15 +3888,13 @@ function TicketDetailModal({
   // Filtra notas internas para que NUNCA apareçam ao solicitante
   const visibleTimeline = useMemo(
     () =>
-      ticket.timeline.filter(
-        (item) => isStaff || item.type !== 'internal'
-      ),
-    [ticket.timeline, isStaff]
+      [...ticket.timeline.filter(item=>item.type!=='internal'),...(isStaff?privateNotes:[])].sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt)),
+    [ticket.timeline, isStaff,privateNotes]
   );
 
   const handleSendChat = async (e) => {
     e.preventDefault();
-    if (!replyText.trim()) return;
+    if ((!isStaff&&!isRequester)||!replyText.trim()) return;
     await onPostMessage({
       content: replyText,
       isInternal: isStaff && isInternalNote
@@ -3989,6 +4015,7 @@ function TicketDetailModal({
             </div>
           </div>
 
+          <section className="bg-white p-4 rounded-2xl border border-slate-200 space-y-2"><h3 className="font-bold text-sm">Observadores</h3><p className="text-xs">{(ticket.observerIds||[]).map(id=>users.find(u=>u.id===id)?.name||'Colaborador').join(', ')||'Nenhum observador'}</p>{(isStaff||isRequester)&&<><ObserverPicker users={users} catalog={departmentCatalog} department={ticket.department} requesterId={ticket.requesterId} value={observerDraft} onChange={setObserverDraft}/><button type="button" className="bg-indigo-600 text-white rounded-lg p-2 text-xs" onClick={async()=>{try{await onSaveObservers(observerDraft);}catch(e){alert(e.message);}}}>Salvar observadores</button></>}</section>
           {isStaff && ticket.status !== 'concluido' && (
             <div className="bg-white p-4 rounded-2xl border border-slate-200">
               <label className="block text-xs font-bold text-slate-700 mb-2">Etapa personalizada (opcional)</label>
@@ -4356,7 +4383,7 @@ function TicketDetailModal({
         </div>
 
         {/* RODAPÉ FIXO: COMPOSITOR DE MENSAGEM PÚBLICA OU NOTA INTERNA */}
-        <form
+        {(isStaff||isRequester)?<form
           onSubmit={handleSendChat}
           className="px-4 sm:px-6 py-3.5 border-t border-slate-200 bg-white shrink-0 pb-[calc(0.875rem+env(safe-area-inset-bottom))] sm:pb-3.5 space-y-2"
         >
@@ -4417,7 +4444,7 @@ function TicketDetailModal({
               <span className="hidden sm:inline">Enviar</span>
             </button>
           </div>
-        </form>
+        </form>:<div className="p-4 bg-white border-t text-sm text-slate-500">Você acompanha este chamado somente para visualização.</div>}
       </div>
     </div>
   );
@@ -4723,3 +4750,7 @@ function NotificationPreferences({userId,soundEnabled,setSoundEnabled}) {
     </section></div>}
   </>;
 }
+
+function ObserverPicker({users,catalog,department,requesterId,value,onChange}){const [q,setQ]=useState('');const candidates=users.filter(u=>u.active!==false&&u.id!==requesterId&&sameDepartment(catalog,u.department,department)&&value.length<20&&!value.includes(u.id)&&`${u.name} ${u.email}`.toLowerCase().includes(q.toLowerCase()));return <div className="space-y-2 border border-slate-200 rounded-xl p-3"><label className="text-xs font-bold">Observadores (opcional)</label><p className="text-xs text-slate-500">Colaboradores do departamento com conta ativa. Apenas acompanhamento.</p>{value.map(id=><div key={id} className="flex justify-between text-sm"><span>{users.find(u=>u.id===id)?.name||id}</span><button type="button" className="text-rose-600" onClick={()=>onChange(value.filter(x=>x!==id))}>Remover</button></div>)}<input className="w-full border rounded-lg p-2 text-sm" placeholder="Buscar por nome ou e-mail" value={q} onChange={e=>setQ(e.target.value)}/>{candidates.slice(0,8).map(u=><button type="button" key={u.id} className="block text-left w-full text-sm p-2 border rounded-lg" onClick={()=>onChange([...value,u.id])}>{u.name} · {u.email}</button>)}</div>}
+
+function sameDepartment(catalog,a,b){if(!a||!b)return false;if(a===b)return true;return (catalog||[]).some(d=>[d.name,...(d.aliases||[])].includes(a)&&[d.name,...(d.aliases||[])].includes(b));}
