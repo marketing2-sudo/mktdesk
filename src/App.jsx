@@ -48,6 +48,7 @@ import {
   Inbox
 } from 'lucide-react';
 import { supabase, supabaseConfigured } from './supabase';
+import { ReferencePicker, ReferenceFiles, uploadReferences } from './references';
 
 // Armazenamento local seguro contra bloqueios de sandbox/iframe
 const memoryFallbackStore = {};
@@ -776,8 +777,7 @@ export default function App() {
   const handleCreateTicket = async (formData) => {
     if (!currentUser) return;
     if (!settings.categories.some(c => c.id === formData.categoryId && c.active !== false)) {
-      setDataError('Serviço indisponível. Escolha um serviço ativo.');
-      return;
+      throw new Error('Serviço indisponível. Escolha um serviço ativo.');
     }
     const categoryObj =
       settings.categories.find((c) => c.id === formData.categoryId && c.active !== false) ||
@@ -833,6 +833,14 @@ export default function App() {
     newTicket.protocol = protocol;
     setShowNewTicketModal(false);
     setActiveTicketId(newTicket.id);
+    if (formData.referenceFiles?.length) {
+      try {
+        await handlePostMessage(savedTicket, {content:'Referências do briefing', isInternal:false, files:formData.referenceFiles, isReference:true});
+      } catch (error) {
+        setDataError(`Chamado ${protocol} criado, mas não foi possível anexar as referências: ${error.message}. Abra o chat deste chamado e envie os arquivos novamente.`);
+        showFloatingPopup({title: "Chamado criado sem anexos", message: "Não foi possível enviar as referências. Reenvie pelo chat.", type:"warning",ticketId:newTicket.id});
+      }
+    }
 
     // Notifica toda a equipe de Marketing (Admins + Técnicos ativos)
     const mktTeam = users.filter(
@@ -886,52 +894,20 @@ export default function App() {
     }
   };
 
-  const handlePostMessage = async (ticket, { content, isInternal }) => {
-    if (!currentUser || !content.trim()) return;
-    const nowIso = new Date().toISOString();
-    const isMarketingStaff =
-      ['admin','super_admin'].includes(currentUser.role) || currentUser.role === 'tecnico';
-
-    const entry = {
-      id: generateId('msg'),
-      type: isInternal && isMarketingStaff ? 'internal' : 'public',
-      authorId: currentUser.id,
-      authorName: currentUser.name,
-      authorRole: currentUser.role,
-      content: content.trim(),
-      createdAt: nowIso
-    };
-
-    const updated = {
-      ...ticket,
-      firstResponseAt:
-        !isInternal && isMarketingStaff && !ticket.firstResponseAt
-          ? nowIso
-          : ticket.firstResponseAt,
-      updatedAt: nowIso,
-      timeline: [...ticket.timeline, entry]
-    };
-
-    await persistTicketDoc(updated);
-
-    if (isInternal && isMarketingStaff) {
-      showFloatingPopup({
-        title: 'Nota Interna Salva',
-        message: `Anotação técnica privada registrada em ${ticket.protocol}.`,
-        type: 'warning',
-        ticketId: ticket.id,
-        withSound: false
-      });
-      return;
-    }
-
-    // Mensagem pública: notifica a outra ponta
-    if (currentUser.id === ticket.requesterId) {
-      const targets = ticket.assignedTechId
-        ? users.filter((u) => u.id === ticket.assignedTechId)
-        : users.filter((u) => ['admin','super_admin'].includes(u.role) || u.role === 'tecnico');
-    } else {
-      const reqUser = users.find((u) => u.id === ticket.requesterId);
+  const handlePostMessage = async (ticket, { content = '', isInternal = false, files = [], isReference = false }) => {
+    if (!currentUser || (!content.trim() && !files.length)) throw new Error('Escreva uma mensagem ou selecione uma referência.');
+    const staff = ['admin','super_admin','tecnico'].includes(currentUser.role);
+    if (!staff && ticket.requesterId !== currentUser.id) throw new Error('Acesso somente para visualização.');
+    if (isInternal && !staff) throw new Error('Nota interna exclusiva da equipe.');
+    const attachments = await uploadReferences(ticket.id, currentUser.id, isInternal, files);
+    const {error} = await supabase.rpc('bd_post_reference_message', {
+      p_ticket_id:ticket.id, p_content:content.trim(), p_internal:isInternal,
+      p_attachments:attachments, p_reference:isReference
+    });
+    if (error) throw error;
+    await reloadData();
+    if (!isInternal) {
+      try { const {data:{session}} = await supabase.auth.getSession(); if(session) await fetch('/api/push', {method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.access_token},body:JSON.stringify({ticketId:ticket.id})}); } catch {}
     }
   };
 
@@ -3627,24 +3603,23 @@ function NewTicketModal({
   const [objective, setObjective] = useState('');
   const [description, setDescription] = useState('');
   const [referenceLink, setReferenceLink] = useState('');
+  const [referenceFiles,setReferenceFiles] = useState([]);
+  const [sending,setSending] = useState(false);
+  const [sendError,setSendError] = useState('');
+  const submitting = useRef(false);
 
   const selectedCategory = useMemo(
     () => categories.find((c) => c.id === categoryId) || categories[0],
     [categories, categoryId]
   );
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!title.trim() || !description.trim() || !departments.includes(department)) return;
-    onSubmit({
-      title,
-      categoryId,
-      priority,
-      department,
-      objective,
-      description,
-      referenceLink, observerIds
-    });
+    if (submitting.current || !title.trim() || !description.trim() || !departments.includes(department)) return;
+    submitting.current=true; setSending(true); setSendError('');
+    try { await onSubmit({title,categoryId,priority,department,objective,description,referenceLink,observerIds,referenceFiles}); }
+    catch(error) {setSendError(error.message || 'Não foi possível abrir o chamado.');}
+    finally {submitting.current=false;setSending(false);}
   };
 
   return (
@@ -3786,12 +3761,15 @@ function NewTicketModal({
               required
               rows={4}
               value={description}
+              onPaste={e=>{const pasted=Array.from(e.clipboardData.files||[]);if(pasted.length){e.preventDefault();setReferenceFiles(old=>[...old,...pasted]);}}}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Descreva textos, formatos, dimensões, objetivos e informações essenciais para execução sem retrabalho..."
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
 
+          <ReferencePicker files={referenceFiles} onChange={setReferenceFiles} disabled={sending} label="Anexos de referência (opcional)" />
+          {sendError && <p role="alert" className="text-red-700 text-sm">{sendError}</p>}
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
               Link de Referências / Pasta Drive (Opcional)
@@ -3818,10 +3796,11 @@ function NewTicketModal({
           <button
             type="submit"
             form="new-ticket-form"
+            disabled={sending}
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
           >
             <Send className="w-3.5 h-3.5" />
-            Abrir Demanda ({nextProtocol})
+            {sending ? 'Enviando...' : `Abrir Demanda (${nextProtocol})`}
           </button>
         </div>
       </div>
@@ -3864,6 +3843,10 @@ function TicketDetailModal({
 
   // Estados de interação
   const [replyText, setReplyText] = useState('');
+  const [replyFiles,setReplyFiles]=useState([]);
+  const [chatSending,setChatSending]=useState(false);
+  const [chatError,setChatError]=useState('');
+  const chatSubmitting=useRef(false);
   const [isInternalNote, setIsInternalNote] = useState(false);
 
   // Modo de ação operacional: 'chat' | 'sac_pause' | 'deliver' | 'adjust'
@@ -3894,12 +3877,13 @@ function TicketDetailModal({
 
   const handleSendChat = async (e) => {
     e.preventDefault();
-    if ((!isStaff&&!isRequester)||!replyText.trim()) return;
-    await onPostMessage({
-      content: replyText,
-      isInternal: isStaff && isInternalNote
-    });
-    setReplyText('');
+    if (chatSubmitting.current || (!isStaff&&!isRequester) || (!replyText.trim()&&!replyFiles.length)) return;
+    chatSubmitting.current=true;setChatSending(true);setChatError('');
+    try {
+      await onPostMessage({content:replyText,isInternal:isStaff&&isInternalNote,files:replyFiles});
+      setReplyText('');setReplyFiles([]);
+    } catch(error) {setChatError(error.message || 'Falha ao enviar referência.');}
+    finally {chatSubmitting.current=false;setChatSending(false);}
   };
 
   return (
@@ -3996,6 +3980,7 @@ function TicketDetailModal({
               <p className="text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">
                 {ticket.description}
               </p>
+              <ReferenceFiles files={(ticket.timeline||[]).filter(x=>x.isReference).flatMap(x=>x.attachments||[])} />
               {ticket.objective && (
                 <p className="text-xs text-slate-600 mt-2">
                   <strong>Canal / Objetivo:</strong> {ticket.objective}
@@ -4364,6 +4349,7 @@ function TicketDetailModal({
                   <p className="text-slate-800 whitespace-pre-wrap leading-relaxed">
                     {item.content}
                   </p>
+                  <ReferenceFiles files={item.attachments || []} />
 
                   {item.deliveryLink && (
                     <a
@@ -4391,6 +4377,7 @@ function TicketDetailModal({
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                disabled={chatSending}
                 onClick={() => setIsInternalNote(false)}
                 className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition ${
                   !isInternalNote
@@ -4403,6 +4390,7 @@ function TicketDetailModal({
               </button>
               <button
                 type="button"
+                disabled={chatSending}
                 onClick={() => setIsInternalNote(true)}
                 className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition ${
                   isInternalNote
@@ -4416,9 +4404,13 @@ function TicketDetailModal({
             </div>
           )}
 
+          <ReferencePicker files={replyFiles} onChange={setReplyFiles} disabled={chatSending} label={isInternalNote ? 'Referências privadas do Marketing' : 'Anexar imagem, print ou PDF'} />
+          {chatError && <p role="alert" className="text-red-700 text-xs">{chatError}</p>}
           <div className="flex items-center gap-2">
             <input
               type="text"
+              disabled={chatSending}
+              onPaste={e=>{const pasted=Array.from(e.clipboardData.files||[]);if(pasted.length){e.preventDefault();setReplyFiles(old=>[...old,...pasted]);}}}
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
               placeholder={
@@ -4434,6 +4426,7 @@ function TicketDetailModal({
             />
             <button
               type="submit"
+              disabled={chatSending || (!replyText.trim() && !replyFiles.length)}
               className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-white text-xs font-bold shadow-xs transition ${
                 isStaff && isInternalNote
                   ? 'bg-amber-600 hover:bg-amber-700'
@@ -4441,7 +4434,7 @@ function TicketDetailModal({
               }`}
             >
               <Send className="w-4 h-4" />
-              <span className="hidden sm:inline">Enviar</span>
+              <span className="hidden sm:inline">{chatSending ? 'Enviando...' : 'Enviar'}</span>
             </button>
           </div>
         </form>:<div className="p-4 bg-white border-t text-sm text-slate-500">Você acompanha este chamado somente para visualização.</div>}
