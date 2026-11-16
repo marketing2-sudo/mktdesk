@@ -2227,13 +2227,15 @@ function AdminDashboardBI({
   onSelectTicket,
   onNudgeDepartmentSAC
 }) {
-  const [period, setPeriod] = useState('30d'); // 7d | 30d | 90d | all
+  const [period, setPeriod] = useState('month'); // mês atual ou período móvel
   const [deptFilter, setDeptFilter] = useState('all');
   const [catFilter, setCatFilter] = useState('all');
 
   const filteredTickets = useMemo(() => {
     const cutoffMs =
-      period === '7d'
+      period === 'month'
+        ? new Date(new Date(nowTick).getFullYear(), new Date(nowTick).getMonth(), 1).getTime()
+        : period === '7d'
         ? nowTick - 7 * 86400000
         : period === '30d'
         ? nowTick - 30 * 86400000
@@ -2250,90 +2252,6 @@ function AdminDashboardBI({
       return true;
     });
   }, [tickets, period, deptFilter, catFilter, nowTick]);
-
-  // Cálculo dos 5 KPIs Executivos
-  const kpis = useMemo(() => {
-    const total = filteredTickets.length;
-    const concluded = filteredTickets.filter((t) => t.status === 'concluido');
-    const throughputRate =
-      total > 0 ? Math.round((concluded.length / total) * 100) : 0;
-
-    // Conformidade de SLA
-    let withinSlaCount = 0;
-    filteredTickets.forEach((t) => {
-      const sla = calculateTicketSLA(t, nowTick);
-      if (!sla.isBreached) withinSlaCount++;
-    });
-    const slaCompliance =
-      total > 0 ? Math.round((withinSlaCount / total) * 100) : 100;
-
-    // TMA (Tempo Médio de Atendimento ativo) e TMR (Tempo Médio de Primeira Resposta)
-    let sumTmaMs = 0;
-    let countTma = 0;
-    let sumTmrMs = 0;
-    let countTmr = 0;
-
-    filteredTickets.forEach((t) => {
-      if (t.firstResponseAt) {
-        const diff =
-          new Date(t.firstResponseAt).getTime() -
-          new Date(t.createdAt).getTime();
-        if (diff >= 0) {
-          sumTmrMs += diff;
-          countTmr++;
-        }
-      }
-      if (t.status === 'concluido' && t.completedAt) {
-        const sla = calculateTicketSLA(t, nowTick);
-        sumTmaMs += sla.activeElapsedMs;
-        countTma++;
-      }
-    });
-
-    const avgTmaMs = countTma > 0 ? sumTmaMs / countTma : 0;
-    const avgTmrMs = countTmr > 0 ? sumTmrMs / countTmr : 0;
-
-    // Gargalos SAC (atualmente aguardando solicitante)
-    const sacTickets = filteredTickets.filter(
-      (t) => t.status === 'aguardando_solicitante'
-    );
-    let totalSacWaitMs = 0;
-    sacTickets.forEach((t) => {
-      if (t.sacPausedAt) {
-        totalSacWaitMs += Math.max(
-          0,
-          nowTick - new Date(t.sacPausedAt).getTime()
-        );
-      }
-    });
-    const avgSacWaitMs =
-      sacTickets.length > 0 ? totalSacWaitMs / sacTickets.length : 0;
-
-    // Satisfação CSAT
-    const rated = filteredTickets.filter(
-      (t) => typeof t.csatRating === 'number' && t.csatRating > 0
-    );
-    const avgCsat =
-      rated.length > 0
-        ? (
-            rated.reduce((acc, t) => acc + t.csatRating, 0) / rated.length
-          ).toFixed(1)
-        : '—';
-
-    return {
-      total,
-      concludedCount: concluded.length,
-      throughputRate,
-      slaCompliance,
-      withinSlaCount,
-      avgTmaMs,
-      avgTmrMs,
-      sacCount: sacTickets.length,
-      avgSacWaitMs,
-      avgCsat,
-      ratedCount: rated.length
-    };
-  }, [filteredTickets, nowTick]);
 
   // Ranking de Gargalos SAC por Departamento
   const sacBottlenecks = useMemo(() => {
@@ -2396,59 +2314,6 @@ function AdminDashboardBI({
     });
   }, [users, filteredTickets, nowTick]);
 
-  // Série Temporal SVG (últimos 7 pontos agrupados)
-  const timelineSeries = useMemo(() => {
-    const days = period === '7d' ? 7 : period === '90d' ? 14 : 10;
-    const points = [];
-    for (let i = days - 1; i >= 0; i--) {
-      const dayStart = new Date(nowTick - i * 86400000);
-      dayStart.setHours(0, 0, 0, 0);
-      const dayEnd = new Date(dayStart.getTime() + 86400000);
-
-      const opened = filteredTickets.filter((t) => {
-        const ms = new Date(t.createdAt).getTime();
-        return ms >= dayStart.getTime() && ms < dayEnd.getTime();
-      }).length;
-
-      const closed = filteredTickets.filter((t) => {
-        if (!t.completedAt) return false;
-        const ms = new Date(t.completedAt).getTime();
-        return ms >= dayStart.getTime() && ms < dayEnd.getTime();
-      }).length;
-
-      points.push({
-        label: formatDateShort(dayStart.toISOString()),
-        opened,
-        closed
-      });
-    }
-    return points;
-  }, [filteredTickets, period, nowTick]);
-
-  // Distribuição Donut por Status
-  const statusDistribution = useMemo(() => {
-    const keys = [
-      'novo',
-      'em_atendimento',
-      'aguardando_solicitante',
-      'em_aprovacao',
-      'concluido'
-    ];
-    const colors = {
-      novo: '#0ea5e9',
-      em_atendimento: '#4f46e5',
-      aguardando_solicitante: '#f59e0b',
-      em_aprovacao: '#9333ea',
-      concluido: '#10b981'
-    };
-    return keys.map((k) => ({
-      key: k,
-      label: STATUS_META[k].shortLabel,
-      color: colors[k],
-      count: filteredTickets.filter((t) => t.status === k).length
-    }));
-  }, [filteredTickets]);
-
   // Exportação CSV real com BOM UTF-8
   const handleExportCSV = () => {
     const headers = [
@@ -2505,17 +2370,35 @@ function AdminDashboardBI({
     URL.revokeObjectURL(url);
   };
 
-  // Cálculo dos arcos do Gráfico Donut SVG
-  const totalStatusCount = statusDistribution.reduce((s, d) => s + d.count, 0);
-  const donutRadius = 42;
-  const donutCircumference = 2 * Math.PI * donutRadius;
-  let cumulativeDash = 0;
-
-  // Escala do Gráfico de Evolução Temporal SVG
-  const maxSeriesVal = Math.max(
-    1,
-    ...timelineSeries.map((p) => Math.max(p.opened, p.closed))
-  );
+  const META_BASE = 85;
+  const scope = tickets.filter(t => (deptFilter === 'all' || t.department === deptFilter) && (catFilter === 'all' || t.categoryId === catFilter));
+  const now = new Date(nowTick);
+  const start = period === 'month' ? new Date(now.getFullYear(), now.getMonth(), 1).getTime() : period === 'all' ? 0 : nowTick - Number.parseInt(period, 10) * 86400000;
+  const inPeriod = value => { const ms = new Date(value).getTime(); return Boolean(value) && ms >= start && ms <= nowTick; };
+  const opened = scope.filter(t => inPeriod(t.createdAt));
+  const closed = scope.filter(t => t.status === 'concluido' && inPeriod(t.completedAt));
+  const pending = opened.filter(t => t.status === 'aguardando_solicitante').length;
+  const rate = opened.length ? closed.length / opened.length * 100 : null;
+  const delta = rate === null ? null : (rate / META_BASE - 1) * 100;
+  const fmt = n => n.toLocaleString('pt-BR', {maximumFractionDigits:1, minimumFractionDigits:1});
+  const serviceCounts = new Map();
+  opened.forEach(t => { const name = settings.categories.find(c => c.id === t.categoryId)?.name || t.categoryName || 'Outros'; serviceCounts.set(name, (serviceCounts.get(name)||0)+1); });
+  const ranking = [...serviceCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const rankMax = Math.max(1,...ranking.map(r=>r[1]));
+  const statusColors = {concluido:'#104f59',em_atendimento:'#7ca2a6',novo:'#a9c5c7',aguardando_solicitante:'#d9a34b',em_aprovacao:'#8b82a5'};
+  const segments = Object.keys(statusColors).map(key=>({key,label:STATUS_META[key].shortLabel,color:statusColors[key],count:opened.filter(t=>t.status===key).length})).filter(x=>x.count);
+  let angle = 0;
+  const gradient = segments.map(seg=>{ const from=angle; angle += seg.count/opened.length*360; return `${seg.color} ${from}deg ${angle}deg`; }).join(', ');
+  const months = Array.from({length:12}, (_,i)=>{
+    const from=new Date(now.getFullYear(),now.getMonth()-11+i,1);
+    const to=new Date(from.getFullYear(),from.getMonth()+1,1);
+    const during=value=> Boolean(value) && new Date(value)>=from && new Date(value)<to && new Date(value).getTime()<=nowTick;
+    const created=scope.filter(t=>during(t.createdAt));
+    return {label:from.toLocaleDateString('pt-BR',{month:'short',year:'2-digit'}).replace('.',''), opened:created.length, closed:scope.filter(t=>t.status==='concluido'&&during(t.completedAt)).length, late:created.filter(t=>calculateTicketSLA(t,nowTick).isBreached).length};
+  });
+  const axisMax=Math.max(4,Math.ceil(Math.max(...months.flatMap(m=>[m.opened,m.closed,m.late]))/4)*4);
+  const chartY=n=>200-n/axisMax*165;
+  const chartX=i=>66+i*72;
 
   return (
     <div className="space-y-6">
@@ -2523,11 +2406,10 @@ function AdminDashboardBI({
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs">
         <div>
           <h2 className="text-lg sm:text-xl font-extrabold text-slate-900">
-            Dashboards & Inteligência Operacional (BI)
+            Dashboards & Inteligência Operacional (BI) · v0.4
           </h2>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Indicadores de vazão, SLA líquido, gargalos SAC e satisfação CSAT em
-            tempo real.
+            Indicadores de chamados, meta de fechamento e evolução mensal.
           </p>
         </div>
 
@@ -2537,6 +2419,7 @@ function AdminDashboardBI({
             onChange={(e) => setPeriod(e.target.value)}
             className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
+            <option value="month">Mês atual</option>
             <option value="7d">Últimos 7 dias</option>
             <option value="30d">Últimos 30 dias</option>
             <option value="90d">Últimos 90 dias</option>
@@ -2580,246 +2463,45 @@ function AdminDashboardBI({
         </div>
       </div>
 
-      {/* 5 KPIs EXECUTIVOS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            Demandas & Vazão
-          </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-extrabold text-slate-900 tabular-nums">
-              {kpis.total}
-            </span>
-            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full tabular-nums">
-              {kpis.concludedCount} concluídas ({kpis.throughputRate}%)
-            </span>
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            Conformidade SLA
-          </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-extrabold text-indigo-600 tabular-nums">
-              {kpis.slaCompliance}%
-            </span>
-            <span className="text-xs text-slate-500 tabular-nums">
-              {kpis.withinSlaCount}/{kpis.total} no prazo
-            </span>
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            TMA / TMR Líquido
-          </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-extrabold text-slate-900 tabular-nums">
-              {kpis.avgTmaMs > 0 ? formatDuration(kpis.avgTmaMs) : '—'}
-            </span>
-            <span className="text-xs text-slate-500 tabular-nums">
-              1ª resp: {kpis.avgTmrMs > 0 ? formatDuration(kpis.avgTmrMs) : '—'}
-            </span>
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            Gargalos SAC
-          </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-extrabold text-amber-600 tabular-nums">
-              {kpis.sacCount}
-            </span>
-            <span className="text-xs text-slate-500 tabular-nums">
-              Espera: {kpis.avgSacWaitMs > 0 ? formatDuration(kpis.avgSacWaitMs) : '0m'}
-            </span>
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-            Satisfação CSAT
-          </div>
-          <div className="mt-2 flex items-baseline justify-between">
-            <span className="text-2xl font-extrabold text-slate-900 flex items-center gap-1 tabular-nums">
-              {kpis.avgCsat}
-              <Star className="w-5 h-5 text-amber-400 fill-amber-400" />
-            </span>
-            <span className="text-xs text-slate-500 tabular-nums">
-              {kpis.ratedCount} avaliações
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* GRÁFICOS SVG INTERATIVOS */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Gráfico 1: Evolução Temporal */}
-        <div className="lg:col-span-2 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900">
-                Evolução Temporal de Demandas
-              </h3>
-              <p className="text-xs text-slate-500">
-                Comparativo diário entre demandas abertas e entregas concluídas
-              </p>
+      {/* Dashboard executivo - referência verde petróleo */}
+      <section className="rounded-3xl p-3 sm:p-4 space-y-4" style={{backgroundColor:'#416267'}}>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+          <div className="lg:col-span-2 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {[['Pendente',pending,'Aguardando solicitante'],['Aberto',opened.length,'Aberturas no período'],['Fechado',closed.length,'Conclusões no período'],['Meta',rate===null?'—':fmt(rate)+'%','Base: 85%']].map(([label,value,detail])=>(
+                <div key={label} className="bg-white rounded-2xl px-2 py-3 text-center min-w-0" style={{color:'#416267'}}>
+                  <div className="text-lg sm:text-xl font-normal">{label}</div>
+                  <div className="text-3xl xl:text-5xl font-normal tabular-nums mt-1">{value}</div>
+                  {label==='Meta' && delta!==null && <div className="text-sm font-semibold" style={{color:delta>=0?'#15803d':'#b74724'}}>{delta>=0?'↑ +':'↓ '}{fmt(delta)}%</div>}
+                  <p className="text-[10px] mt-1 text-slate-500">{detail}</p>
+                </div>
+              ))}
             </div>
-            <div className="flex items-center gap-4 text-xs font-semibold">
-              <span className="flex items-center gap-1.5 text-indigo-600">
-                <span className="w-2.5 h-2.5 rounded-full bg-indigo-600" />
-                Abertas
-              </span>
-              <span className="flex items-center gap-1.5 text-emerald-600">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                Concluídas
-              </span>
+            <div className="rounded-2xl p-4 text-white" style={{backgroundColor:'#104f59'}}>
+              <h3 className="text-sm font-semibold">Serviços mais solicitados</h3>
+              {ranking.length===0 ? <p className="py-14 text-center text-sm">Nenhuma abertura no período.</p> : <div className="overflow-x-auto"><svg viewBox="0 0 600 155" className="w-full min-w-[320px]" role="img" aria-label="Ranking dos cinco serviços mais solicitados">
+                {[0,.25,.5,.75,1].map(v=><g key={v}><line x1="32" x2="594" y1={110-v*85} y2={110-v*85} stroke="white" opacity=".25"/><text x="27" y={113-v*85} fill="white" fontSize="9" textAnchor="end">{Math.round(rankMax*v)}</text></g>)}
+                {ranking.map(([name,count],i)=>{const slot=560/ranking.length; const x=32+i*slot+slot/2; const h=count/rankMax*85; return <g key={name}><rect x={x-slot*.34} y={110-h} width={slot*.68} height={h} fill="white"><title>{name}: {count}</title></rect><text x={x} y={105-h} fill="white" fontSize="11" textAnchor="middle">{count}</text><text x={x} y="126" textAnchor="middle" fill="white" fontSize="10">{name.length>22?name.slice(0,20)+'…':name}<title>{name}</title></text></g>;})}
+              </svg></div>}
             </div>
           </div>
-
-          {filteredTickets.length === 0 ? (
-            <div className="h-52 rounded-xl bg-slate-50 border border-dashed border-slate-200 flex flex-col items-center justify-center text-center p-4">
-              <FileText className="w-8 h-8 text-slate-300 mb-2" />
-              <p className="text-sm font-semibold text-slate-600">
-                Nenhuma demanda registrada neste período
-              </p>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Assim que a primeira demanda (#MKT-1001) for aberta, o gráfico
-                será plotado automaticamente.
-              </p>
-            </div>
-          ) : (
-            <div className="w-full overflow-x-auto">
-              <svg viewBox="0 0 600 190" className="w-full h-52">
-                {[0, 0.5, 1].map((step, i) => {
-                  const y = 150 - step * 120;
-                  return (
-                    <line
-                      key={i}
-                      x1="36"
-                      y1={y}
-                      x2="584"
-                      y2={y}
-                      stroke="#e2e8f0"
-                      strokeDasharray="4 4"
-                    />
-                  );
-                })}
-
-                {timelineSeries.map((pt, idx) => {
-                  const slotWidth = 540 / timelineSeries.length;
-                  const xCenter = 40 + idx * slotWidth + slotWidth / 2;
-                  const openH = (pt.opened / maxSeriesVal) * 120;
-                  const closeH = (pt.closed / maxSeriesVal) * 120;
-
-                  return (
-                    <g key={pt.label}>
-                      <rect
-                        x={xCenter - 12}
-                        y={150 - openH}
-                        width="10"
-                        height={Math.max(2, openH)}
-                        rx="3"
-                        fill="#4f46e5"
-                      >
-                        <title>{`${pt.label}: ${pt.opened} aberta(s)`}</title>
-                      </rect>
-                      <rect
-                        x={xCenter + 2}
-                        y={150 - closeH}
-                        width="10"
-                        height={Math.max(2, closeH)}
-                        rx="3"
-                        fill="#10b981"
-                      >
-                        <title>{`${pt.label}: ${pt.closed} concluída(s)`}</title>
-                      </rect>
-                      <text
-                        x={xCenter}
-                        y="172"
-                        textAnchor="middle"
-                        fontSize="10"
-                        fill="#64748b"
-                      >
-                        {pt.label}
-                      </text>
-                    </g>
-                  );
-                })}
-              </svg>
-            </div>
-          )}
-        </div>
-
-        {/* Gráfico 2: Donut por Status */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col justify-between">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900">
-              Distribuição por Status
-            </h3>
-            <p className="text-xs text-slate-500">
-              Visão proporcional da carteira filtrada
-            </p>
+          <div className="bg-white rounded-2xl p-4 flex flex-col justify-center gap-4">
+            <h3 className="text-sm font-semibold text-slate-700">Distribuição por status</h3>
+            {segments.length ? <div className="flex flex-wrap items-center justify-center gap-4"><div className="relative rounded-full w-40 h-40 shrink-0" style={{background:`conic-gradient(${gradient})`}} role="img" aria-label="Distribuição por status"/><div className="space-y-2 text-xs">{segments.map(seg=><div key={seg.key} className="flex items-center gap-2"><span className="w-3 h-3 rounded-full shrink-0" style={{backgroundColor:seg.color}}/>{seg.label} · {fmt(seg.count/opened.length*100)}%</div>)}</div></div> : <p className="text-center text-sm text-slate-500 py-12">Sem dados no período</p>}
+            <p className="text-[10px] text-slate-500 text-center">Situação atual dos chamados abertos no período.</p>
           </div>
-
-          {totalStatusCount === 0 ? (
-            <div className="h-52 my-auto rounded-xl bg-slate-50 border border-dashed border-slate-200 flex flex-col items-center justify-center text-center p-4 mt-4">
-              <Clock className="w-7 h-7 text-slate-300 mb-1.5" />
-              <p className="text-xs font-semibold text-slate-600">
-                Carteira vazia no filtro atual
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center my-3">
-              <svg viewBox="0 0 120 120" className="w-36 h-36 -rotate-90">
-                {statusDistribution.map((seg) => {
-                  if (seg.count === 0) return null;
-                  const dash =
-                    (seg.count / totalStatusCount) * donutCircumference;
-                  const offset = -cumulativeDash;
-                  cumulativeDash += dash;
-                  return (
-                    <circle
-                      key={seg.key}
-                      cx="60"
-                      cy="60"
-                      r={donutRadius}
-                      fill="transparent"
-                      stroke={seg.color}
-                      strokeWidth="16"
-                      strokeDasharray={`${dash} ${donutCircumference}`}
-                      strokeDashoffset={offset}
-                    >
-                      <title>{`${seg.label}: ${seg.count}`}</title>
-                    </circle>
-                  );
-                })}
-              </svg>
-              <div className="w-full space-y-1.5 mt-2">
-                {statusDistribution.map((seg) => (
-                  <div
-                    key={seg.key}
-                    className="flex items-center justify-between text-xs"
-                  >
-                    <span className="flex items-center gap-2 text-slate-700 font-medium">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full"
-                        style={{ backgroundColor: seg.color }}
-                      />
-                      {seg.label}
-                    </span>
-                    <span className="font-bold text-slate-900 tabular-nums">
-                      {seg.count}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
-      </div>
+        <div className="bg-white rounded-2xl p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2"><h3 className="text-sm font-bold text-slate-700">Evolução mensal · últimos 12 meses</h3><div className="flex flex-wrap gap-3 text-xs text-slate-600"><span style={{color:'#b74724'}}>━ Chamados atrasados</span><span style={{color:'#416267'}}>■ Abertos mês</span><span style={{color:'#104f59'}}>■ Fechados mês</span></div></div>
+          <div className="overflow-x-auto"><svg viewBox="0 0 930 238" className="w-full min-w-[650px]" role="img" aria-label="Comparativo mensal de aberturas, conclusões e atrasos">
+            {[0,1,2,3,4].map(i=>{const value=axisMax*i/4;return <g key={i}><line x1="34" x2="914" y1={chartY(value)} y2={chartY(value)} stroke="#e2e8f0"/><text x="28" y={chartY(value)+4} fontSize="10" textAnchor="end" fill="#64748b">{value}</text></g>;})}
+            {months.map((m,i)=><g key={i}><rect x={chartX(i)-22} y={chartY(m.opened)} width="20" height={200-chartY(m.opened)} fill="#416267"><title>{m.label}: {m.opened} abertos</title></rect><rect x={chartX(i)+1} y={chartY(m.closed)} width="20" height={200-chartY(m.closed)} fill="#104f59"><title>{m.label}: {m.closed} fechados</title></rect><text x={chartX(i)} y="219" textAnchor="middle" fontSize="11" fill="#475569">{m.label}</text></g>)}
+            <polyline points={months.map((m,i)=>`${chartX(i)},${chartY(m.late)}`).join(' ')} fill="none" stroke="#b74724" strokeWidth="2"/>
+            {months.map((m,i)=><circle key={i} cx={chartX(i)} cy={chartY(m.late)} r="3" fill="#b74724"><title>{m.label}: {m.late} chamados fora do SLA</title></circle>)}
+          </svg></div>
+          <p className="text-[11px] text-slate-500">Aberturas por data de criação, fechamentos por data de conclusão. Atrasos por mês de abertura, conforme SLA atual ou final. O gráfico mantém 12 meses e respeita os filtros de departamento e serviço.</p>
+        </div>
+      </section>
 
       {/* RANKING DE GARGALOS SAC & SCORECARDS DA EQUIPE TÉCNICA */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
