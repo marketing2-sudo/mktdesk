@@ -1,0 +1,1 @@
+BravaDesk v0.5: atualizar src/App.jsx, index.html e os três arquivos da pasta public/. Não executar SQL. Banco, variáveis e identificadores internos mantidos. Base: v0.4 dashboard 85%. Não altera permissões por setor. Build não executado.

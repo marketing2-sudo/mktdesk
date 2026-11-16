@@ -470,7 +470,7 @@ function generateAppIconDataUrl(size) {
 
 /**
  * ============================================================================
- * COMPONENTE PRINCIPAL: MktDesk (App)
+ * COMPONENTE PRINCIPAL: BravaDesk (App)
  * ============================================================================
  */
 export default function App() {
@@ -659,8 +659,8 @@ export default function App() {
       const ios = /iPad|iPhone|iPod/.test(ua) && !window.MSStream;
       setIsIOSDevice(ios);
 
-      const icon192 = generateAppIconDataUrl(192);
-      const icon512 = generateAppIconDataUrl(512);
+      const icon192 = new URL("/icon-192.png", window.location.origin).href;
+      const icon512 = new URL("/icon-512.png", window.location.origin).href;
 
       const ensureMeta = (name, content) => {
         let tag = document.querySelector(`meta[name="${name}"]`);
@@ -675,8 +675,8 @@ export default function App() {
       ensureMeta('mobile-web-app-capable', 'yes');
       ensureMeta('apple-mobile-web-app-capable', 'yes');
       ensureMeta('apple-mobile-web-app-status-bar-style', 'black-translucent');
-      ensureMeta('apple-mobile-web-app-title', 'MktDesk');
-      ensureMeta('theme-color', '#4f46e5');
+      ensureMeta('apple-mobile-web-app-title', 'BravaDesk');
+      ensureMeta('theme-color', '#07515a');
 
       if (icon192) {
         let appleLink = document.querySelector('link[rel="apple-touch-icon"]');
@@ -689,13 +689,13 @@ export default function App() {
       }
 
       const manifestObj = {
-        name: 'MktDesk — Central de Demandas de Marketing',
-        short_name: 'MktDesk',
-        description: 'GLPI Corporativo de Demandas e SLA de Marketing',
+        name: 'BravaDesk — Central de Serviços e Demandas Corporativas',
+        short_name: 'BravaDesk',
+        description: 'Central de Serviços e Demandas Corporativas',
         start_url: '.',
         display: 'standalone',
         background_color: '#f8fafc',
-        theme_color: '#4f46e5',
+        theme_color: '#07515a',
         icons: [
           icon192 && { src: icon192, sizes: '192x192', type: 'image/png' },
           icon512 && { src: icon512, sizes: '512x512', type: 'image/png' }
@@ -832,7 +832,7 @@ export default function App() {
           ticketId: ticket ? ticket.id : null,
           withSound: true
         });
-        sendBrowserNativeNotification(`MktDesk • ${title}`, message);
+        sendBrowserNativeNotification(`BravaDesk • ${title}`, message);
       }
 
       // 3. Dispara Webhook real (n8n / Make / Zapier / API) se configurado e registra na Caixa de Saída
@@ -843,7 +843,7 @@ export default function App() {
           event: eventType,
           timestamp: nowIso,
           recipients: emailsList,
-          subject: `[MktDesk] ${title}`,
+          subject: `[BravaDesk] ${title}`,
           body: message,
           ticket: ticket
             ? {
@@ -886,7 +886,7 @@ export default function App() {
           createdAt: nowIso,
           eventType,
           recipients: emailsList.length > 0 ? emailsList : ['teste@webhook.local'],
-          subject: `[MktDesk] ${title}`,
+          subject: `[BravaDesk] ${title}`,
           message,
           protocol: ticket ? ticket.protocol : 'SISTEMA',
           deliveryStatus,
@@ -1753,7 +1753,7 @@ export default function App() {
                     withSound: true
                   });
                   sendBrowserNativeNotification(
-                    'MktDesk • Teste de Notificação',
+                    'BravaDesk • Teste de Notificação',
                     'As notificações nativas estão ativas.'
                   );
                 }}
@@ -1949,7 +1949,7 @@ function AuthScreen() {
   }
   return <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
     <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-7 space-y-5">
-      <div className="text-center"><div className="mx-auto mb-3 w-14 h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center"><Sparkles /></div><h1 className="text-2xl font-bold">MktDesk</h1><p className="text-sm text-slate-500">Central de Demandas de Marketing</p></div>
+      <div className="text-center"><img src="/logo-bravadesk.svg" alt="BravaDesk" className="mx-auto mb-3 w-16 h-16 rounded-2xl object-contain" /><h1 className="text-2xl font-bold">BravaDesk</h1><p className="text-sm text-slate-500">Central de Serviços e Demandas Corporativas</p></div>
       <div className="flex gap-2 justify-center text-sm">{[['login','Entrar'],['register','Cadastrar'],['reset','Recuperar senha']].map(([value,label])=><button key={value} type="button" onClick={()=>{setMode(value);setNotice('');}} className={'px-3 py-2 rounded-lg '+(mode===value?'bg-indigo-600 text-white':'bg-slate-100')}>{label}</button>)}</div>
       <form onSubmit={submit} className="space-y-3">
         {mode==='register'&&<><input className="w-full border rounded-lg p-3" placeholder="Nome completo" required value={name} onChange={e=>setName(e.target.value)}/><select className="w-full border rounded-lg p-3" value={department} onChange={e=>setDepartment(e.target.value)}>{DEPARTMENTS.map(d=><option key={d}>{d}</option>)}</select><input className="w-full border rounded-lg p-3" placeholder="Cargo" required value={jobTitle} onChange={e=>setJobTitle(e.target.value)}/></>}
@@ -1985,20 +1985,18 @@ function HeaderBar({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
         {/* Marca */}
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0">
-            <Sparkles className="w-5 h-5" />
-          </div>
+          <img src="/logo-bravadesk.svg" alt="BravaDesk" className="w-10 h-10 rounded-xl object-contain shrink-0" />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="font-extrabold text-slate-900 tracking-tight text-base sm:text-lg">
-                MktDesk
+                BravaDesk
               </span>
               <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 text-slate-600">
-                GLPI Marketing
+                Service Desk
               </span>
             </div>
             <p className="text-[11px] text-slate-500 truncate hidden sm:block">
-              Central Corporativa de Demandas & SLA
+              Central de Serviços e Demandas Corporativas
             </p>
           </div>
         </div>
@@ -2738,7 +2736,7 @@ function AdminTeamManager({
     onRequestConfirm({
       title: nextActive ? 'Reativar Usuário' : 'Bloquear Acesso do Usuário',
       message: nextActive
-        ? `Deseja restaurar o acesso de ${targetUser.name} ao MktDesk?`
+        ? `Deseja restaurar o acesso de ${targetUser.name} ao BravaDesk?`
         : `Deseja bloquear o acesso de ${targetUser.name}? Ele não poderá entrar enquanto estiver bloqueado.`,
       confirmLabel: nextActive ? 'Reativar' : 'Bloquear Acesso',
       danger: !nextActive,
@@ -3149,7 +3147,7 @@ function AdminSettingsPanel({
         onRequestConfirm({
           title: 'Arquivo Inválido',
           message:
-            'O arquivo selecionado não é um backup JSON válido do MktDesk.',
+            'O arquivo selecionado não é um backup JSON válido do BravaDesk.',
           confirmLabel: 'Entendi',
           onConfirm: () => {}
         });
@@ -5113,7 +5111,7 @@ function IOSInstallModal({ onClose }) {
       <div className="bg-white max-w-md w-full rounded-3xl shadow-2xl p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="font-extrabold text-slate-900 text-base">
-            Instalar MktDesk na Tela de Início
+            Instalar BravaDesk na Tela de Início
           </h3>
           <button
             type="button"
@@ -5125,7 +5123,7 @@ function IOSInstallModal({ onClose }) {
         </div>
 
         <p className="text-xs text-slate-600 leading-relaxed">
-          Para instalar o <strong>MktDesk</strong> como aplicativo no seu iPhone,
+          Para instalar o <strong>BravaDesk</strong> como aplicativo no seu iPhone,
           iPad ou navegador:
         </p>
 
