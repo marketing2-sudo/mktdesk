@@ -1,0 +1,12 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {defaultSchedule as c,formatSLADuration as f,formatDeliveryDate,deliveryLabel,addBusinessMs} from '../src/business081.js';
+const h=3600000;
+test('24 hours remains hours',()=>assert.equal(f(24*h,c),'24h'));
+test('30 hours equals four working days',()=>assert.equal(f(30*h,c),'4 dias úteis'));
+test('48 hours uses workday and remainder',()=>assert.equal(f(48*h,c),'6 dias úteis e 3h'));
+test('72 hours preserves half hour',()=>assert.equal(f(72*h,c),'9 dias úteis e 4h e 30min'));
+test('legacy uses 24 hour days',()=>assert.equal(f(48*h,null),'2 dias corridos'));
+test('custom schedule',()=>assert.equal(f(32*h,{...c,start:'08:00',end:'17:00'}),'4 dias úteis'));
+test('date in Bahia and holiday',()=>assert.equal(formatDeliveryDate(addBusinessMs(Date.parse('2026-11-19T16:30:00-03:00'),2*h,{...c,holidays:['2026-11-20']})),'23/11/2026 às 10:00'));
+test('paused and cancelled dates not promised',()=>{assert.match(deliveryLabel({isPaused:true,deadline:null},'aguardando_solicitante'),/pausado/);assert.equal(deliveryLabel({},'cancelado'),'Entrega cancelada')});

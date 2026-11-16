@@ -1,5 +1,5 @@
 import {Workflow081,MentionPicker,workflowRPC} from './workflow081';
-import {businessState,addBusinessMs} from './business081';
+import {businessState,addBusinessMs,formatSLADuration,formatDeliveryDate,deliveryLabel} from './business081';
 import { ProductionPanel, ProductionChecklist } from './production08';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
@@ -369,7 +369,7 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
       remainingMs,
       currentPauseMs: 0,
       percentUsed: 100,
-      label: `Estourado há ${formatDuration(remainingMs)}`,
+      label: `Estourado há ${formatSLADuration(remainingMs,ticket.businessSchedule)}`,
       badgeClass: 'bg-rose-50 text-rose-700 border-rose-200'
     };
   }
@@ -383,7 +383,7 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
       remainingMs,
       currentPauseMs: 0,
       percentUsed,
-      label: `Restam ${formatDuration(remainingMs)}`,
+      label: `Restam ${formatSLADuration(remainingMs,ticket.businessSchedule)}`,
       badgeClass: 'bg-amber-50 text-amber-700 border-amber-200'
     };
   }
@@ -396,7 +396,7 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
     remainingMs,
     currentPauseMs: 0,
     percentUsed,
-    label: `Restam ${formatDuration(remainingMs)}`,
+    label: `Restam ${formatSLADuration(remainingMs,ticket.businessSchedule)}`,
     badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200'
   };
 }
@@ -1401,7 +1401,7 @@ export default function App() {
 
       {/* CONTEÚDO PRINCIPAL POR PERFIL */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-7">
-        <details className="mb-5 bg-white border border-slate-200 rounded-xl p-3"><summary className="cursor-pointer font-bold text-indigo-700">Central de produção · v0.8.1</summary><div className="mt-3"><ProductionPanel key={currentUser.id} user={currentUser} tickets={tickets} users={users} onSelect={setActiveTicketId} calculateSLA={calculateTicketSLA} nowTick={nowTick}/></div></details>
+        <details className="mb-5 bg-white border border-slate-200 rounded-xl p-3"><summary className="cursor-pointer font-bold text-indigo-700">Central de produção · v0.8.2</summary><div className="mt-3"><ProductionPanel key={currentUser.id} user={currentUser} tickets={tickets} users={users} onSelect={setActiveTicketId} calculateSLA={calculateTicketSLA} nowTick={nowTick}/></div></details>
         {/* ======================== PAINEL ADMIN ======================== */}
         {['admin','super_admin'].includes(currentUser.role) && (
           <>
@@ -2057,6 +2057,8 @@ function AdminDashboardBI({
       'Categoria',
       'SLA_Horas',
       'Situacao_SLA',
+      'Prazo_formatado',
+      'Previsao_entrega_Bahia',
       'Departamento',
       'Solicitante',
       'Email_Solicitante',
@@ -2079,6 +2081,8 @@ function AdminDashboardBI({
         t.categoryName,
         t.slaHours,
         sla.label,
+        formatSLADuration(t.slaHours*3600000,t.businessSchedule),
+        sla.deadline==null ? deliveryLabel(sla,t.status) : formatDeliveryDate(sla.deadline),
         t.department,
         t.requesterName,
         t.requesterEmail,
@@ -2196,6 +2200,10 @@ function AdminDashboardBI({
         </div>
       </div>
 
+      <section className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+        <h3 className="font-bold text-sm">Próximas entregas</h3>
+        {filteredTickets.filter(t=>!['concluido','cancelado'].includes(t.status)).map(t=>({t,sla:calculateTicketSLA(t,nowTick)})).sort((a,b)=>(a.sla.deadline??Infinity)-(b.sla.deadline??Infinity)).slice(0,10).map(({t,sla})=><button key={t.id} onClick={()=>onSelectTicket(t.id)} className="block text-left text-xs border-b border-slate-100 pb-2 w-full"><strong>{t.protocol} · {t.title}</strong><span className="block text-slate-600">{deliveryLabel(sla,t.status)}</span></button>)}
+      </section>
       {/* Dashboard executivo - referência verde petróleo */}
       <section className="bd-dashboard rounded-3xl p-3 sm:p-4 space-y-4" style={{backgroundColor:'#416267'}}>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
@@ -2809,7 +2817,7 @@ function AdminSettingsPanel({
       <section id="catalogo-servicos" className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4 scroll-mt-36">
         <div>
           <h3 className="text-lg font-bold text-slate-900">Gestão de Serviços e SLAs</h3>
-          <p className="text-xs text-slate-500">Cadastre serviços e os prazos em horas corridas. Mudanças de prazo afetam novos chamados, não os anteriores.</p>
+          <p className="text-xs text-slate-500">Cadastre serviços e os prazos em horas úteis. Mudanças de prazo afetam novos chamados, não os anteriores.</p>
         </div>
         <div className="space-y-2">
           {(draft.categories || []).map(cat => (
@@ -2826,7 +2834,7 @@ function AdminSettingsPanel({
         <form onSubmit={e => {e.preventDefault(); saveService();}} className="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
           <label className="text-xs font-semibold">Serviço<input required maxLength={100} className="block mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" value={serviceName} onChange={e=>setServiceName(e.target.value)} placeholder="Ex.: Edição de vídeo"/></label>
           <label className="text-xs font-semibold">Descrição<input maxLength={250} className="block mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" value={serviceDescription} onChange={e=>setServiceDescription(e.target.value)} placeholder="Opcional"/></label>
-          <label className="text-xs font-semibold">Prazo (horas corridas)<input required min="1" max="8760" type="number" className="block mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" value={serviceHours} onChange={e=>setServiceHours(e.target.value)}/></label>
+          <label className="text-xs font-semibold">Prazo (horas úteis)<input required min="1" max="8760" type="number" className="block mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm" value={serviceHours} onChange={e=>setServiceHours(e.target.value)}/></label>
           <div className="flex gap-2"><button type="submit" className="rounded-lg bg-indigo-600 text-white px-3 py-2 text-xs font-bold">{editingServiceId ? 'Atualizar' : 'Adicionar serviço'}</button>{editingServiceId && <button type="button" onClick={()=>{setEditingServiceId(null);setServiceName('');setServiceDescription('');setServiceHours('24')}} className="text-xs">Cancelar</button>}</div>
         </form>
         <p className="text-xs text-amber-700 font-semibold">Para gravar as alterações no Supabase, clique em “Salvar Configurações” no início desta página.</p>
@@ -3175,6 +3183,7 @@ function TicketBoardView({
                     >
                       {sla.label}
                     </span>
+                    <span className="block text-[11px] font-medium text-slate-600 break-words">{deliveryLabel(sla,t.status)}</span>
                   </div>
 
                   <h3 className="text-sm sm:text-base font-bold text-slate-900 truncate">
@@ -3281,6 +3290,7 @@ function TicketBoardView({
                             >
                               {sla.label}
                             </span>
+                    <span className="block text-[11px] font-medium text-slate-600 break-words">{deliveryLabel(sla,t.status)}</span>
                           </div>
                           <div className="text-xs font-bold text-slate-900 line-clamp-2">
                             {t.title}
@@ -3551,6 +3561,7 @@ function RequesterPortal({
                   >
                     {sla.label}
                   </span>
+                    <span className="block text-[11px] font-medium text-slate-600 break-words">{deliveryLabel(sla,t.status)}</span>
                 </div>
               </div>
             );
@@ -3584,6 +3595,11 @@ function NewTicketModal({
   const [objective, setObjective] = useState('');
   const [description, setDescription] = useState('');
   const [briefingAnswers,setBriefingAnswers]=useState({});
+  const [previewSchedule,setPreviewSchedule]=useState(null);
+  const [previewError,setPreviewError]=useState('');
+  const [previewNow,setPreviewNow]=useState(Date.now);
+  useEffect(()=>{let alive=true;supabase.rpc('bd082_public_schedule').then(({data,error})=>{if(!alive)return;if(error||!data)setPreviewError('Previsão indisponível; o prazo será calculado ao salvar.');else setPreviewSchedule(data);});const timer=setInterval(()=>setPreviewNow(Date.now()),30000);return()=>{alive=false;clearInterval(timer);};},[]);
+
 
   const [referenceLink, setReferenceLink] = useState('');
   const [referenceFiles,setReferenceFiles] = useState([]);
@@ -3665,7 +3681,7 @@ function NewTicketModal({
               >
                 {categories.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} ({c.slaHours}h)
+                    {c.name} ({previewSchedule ? formatSLADuration(c.slaHours*3600000,previewSchedule) : `${c.slaHours}h úteis`})
                   </option>
                 ))}
               </select>
@@ -3693,11 +3709,13 @@ function NewTicketModal({
             <div className="p-3.5 rounded-2xl bg-indigo-50/80 border border-indigo-200 flex items-center justify-between gap-3">
               <div>
                 <div className="text-xs font-bold text-indigo-950">
-                  SLA Padrão da Categoria: {selectedCategory.slaHours} horas
+                  Prazo do serviço: {previewSchedule ? formatSLADuration(selectedCategory.slaHours*3600000,previewSchedule) : `${selectedCategory.slaHours}h úteis`}
                 </div>
                 <div className="text-[11px] text-indigo-800 mt-0.5">
                   {selectedCategory.description}
                 </div>
+                <div className="text-xs font-semibold mt-2">{previewSchedule ? `Previsão de entrega: ${formatDeliveryDate(addBusinessMs(previewNow,Number(selectedCategory.slaHours)*3600000,previewSchedule))}` : previewError || 'Consultando o expediente...'}</div>
+                <div className="text-[11px] text-indigo-800">Estimativa; a data oficial será calculada na abertura e recalculada após pausas.</div>
               </div>
               <Clock className="w-5 h-5 text-indigo-600 shrink-0" />
             </div>
@@ -3893,6 +3911,7 @@ function TicketDetailModal({
               >
                 {sla.label}
               </span>
+                    <span className="block text-[11px] font-medium text-slate-600 break-words">{deliveryLabel(sla,ticket.status)}</span>
             </div>
             <h3 className="text-base sm:text-lg font-extrabold text-slate-900 mt-1 truncate">
               {ticket.title}
@@ -3931,7 +3950,7 @@ function TicketDetailModal({
                   {ticket.categoryName}
                 </span>
                 <span className="text-slate-500 block">
-                  Prazo: {ticket.slaHours}h
+                  Prazo: {formatSLADuration(ticket.slaHours*3600000,ticket.businessSchedule)} {ticket.businessSchedule ? "(horas úteis)" : "(regra antiga)"}
                 </span>
               </div>
               <div>
