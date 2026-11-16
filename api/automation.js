@@ -14,15 +14,16 @@ export default async function handler(req,res){
  try{
   const db=createClient(env.VITE_SUPABASE_URL,env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
   const jobs=await db.rpc('bd081_run_jobs');if(jobs.error){console.error('bd081 jobs:',jobs.error.code);return res.status(500).json({error:'Falha na rotina do banco'});}
-  if(!env.VITE_VAPID_PUBLIC_KEY||!env.VAPID_PRIVATE_KEY||!env.VAPID_SUBJECT)return res.status(200).json({jobs:jobs.data,push:'não configurado'});
+  const extra=await db.rpc('bd083_run_jobs');if(extra.error){console.error('bd083 jobs:',extra.error.code);return res.status(500).json({error:'Falha na rotina de lembretes'});}
+  if(!env.VITE_VAPID_PUBLIC_KEY||!env.VAPID_PRIVATE_KEY||!env.VAPID_SUBJECT)return res.status(200).json({jobs:jobs.data,communication:extra.data,push:'não configurado'});
   webpush.setVapidDetails(env.VAPID_SUBJECT,env.VITE_VAPID_PUBLIC_KEY,env.VAPID_PRIVATE_KEY);
   const {data:notes,error}=await db.from('notifications').select('id,user_id,data').is('sender_id',null).eq('data->>bd081Automated','true').is('push_claimed_at',null).limit(40);if(error)throw error;
   let sent=0,failed=0;
   for(const n of notes||[]){
    const claim=await db.from('notifications').update({push_claimed_at:new Date().toISOString()}).eq('id',n.id).is('push_claimed_at',null).select('id');if(claim.error||!claim.data?.length)continue;
    const {data:devices,error:deviceError}=await db.from('bd_push_devices').select('endpoint,subscription').eq('user_id',n.user_id);if(deviceError){failed++;continue;}
-   await Promise.all((devices||[]).filter(d=>allowedEndpoint(d.endpoint)&&d.subscription?.endpoint===d.endpoint).map(async d=>{try{await webpush.sendNotification(d.subscription,JSON.stringify({title:n.data.title||'BravaDesk',body:'Há uma atualização em seu chamado.',ticketId:n.data.ticketId,tag:n.id}),{TTL:3600,timeout:3000});sent++;}catch(e){failed++;if([404,410].includes(e.statusCode))await db.from('bd_push_devices').delete().eq('endpoint',d.endpoint).eq('user_id',n.user_id);}}));
+   await Promise.all((devices||[]).filter(d=>allowedEndpoint(d.endpoint)&&d.subscription?.endpoint===d.endpoint).map(async d=>{try{await webpush.sendNotification(d.subscription,JSON.stringify({title:n.data.title||'BravaDesk',body:n.data.message||'Há uma atualização em seu chamado.',ticketId:n.data.ticketId,tag:n.id}),{TTL:3600,timeout:3000});sent++;}catch(e){failed++;if([404,410].includes(e.statusCode))await db.from('bd_push_devices').delete().eq('endpoint',d.endpoint).eq('user_id',n.user_id);}}));
   }
-  return res.status(200).json({jobs:jobs.data,push:{sent,failed}});
+  return res.status(200).json({jobs:jobs.data,communication:extra.data,push:{sent,failed}});
  }catch(e){console.error('bd081 routine failed',e.code||e.name);return res.status(500).json({error:'Falha na rotina automática'});}
 }

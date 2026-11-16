@@ -1,3 +1,4 @@
+import {Communication083} from './communication083';
 import {Workflow081,MentionPicker,workflowRPC} from './workflow081';
 import {businessState,addBusinessMs,formatSLADuration,formatDeliveryDate,deliveryLabel} from './business081';
 import { ProductionPanel, ProductionChecklist } from './production08';
@@ -1401,7 +1402,7 @@ export default function App() {
 
       {/* CONTEÚDO PRINCIPAL POR PERFIL */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-7">
-        <details className="mb-5 bg-white border border-slate-200 rounded-xl p-3"><summary className="cursor-pointer font-bold text-indigo-700">Central de produção · v0.8.2</summary><div className="mt-3"><ProductionPanel key={currentUser.id} user={currentUser} tickets={tickets} users={users} onSelect={setActiveTicketId} calculateSLA={calculateTicketSLA} nowTick={nowTick}/></div></details>
+        <Communication083 user={currentUser} pinnedOnly/><details className="mb-5 bg-white border border-slate-200 rounded-xl p-3"><summary className="cursor-pointer font-bold text-indigo-700">Central de produção · v0.8.3</summary><div className="mt-3"><ProductionPanel key={currentUser.id} user={currentUser} tickets={tickets} users={users} onSelect={setActiveTicketId} calculateSLA={calculateTicketSLA} nowTick={nowTick}/></div></details>
         {/* ======================== PAINEL ADMIN ======================== */}
         {['admin','super_admin'].includes(currentUser.role) && (
           <>
