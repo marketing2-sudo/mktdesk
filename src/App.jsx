@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
+  Moon, Sun,
   LayoutDashboard,
   Kanban,
   List,
@@ -672,7 +673,7 @@ export default function App() {
       ensureMeta('apple-mobile-web-app-capable', 'yes');
       ensureMeta('apple-mobile-web-app-status-bar-style', 'black-translucent');
       ensureMeta('apple-mobile-web-app-title', 'BravaDesk');
-      ensureMeta('theme-color', '#07515a');
+      ensureMeta('theme-color', document.documentElement.dataset.theme==='dark'?'#101e22':'#07515a');
 
       if (icon192) {
         let appleLink = document.querySelector('link[rel="apple-touch-icon"]');
@@ -1682,6 +1683,12 @@ export default function App() {
  * TELA DE AUTENTICAÇÃO REAL & PRIMEIRO ACESSO MASTER
  * ============================================================================
  */
+function ThemeToggle() {
+  const [dark,setDark]=useState(()=>document.documentElement.dataset.theme==='dark');
+  function toggle(){const next=!dark;setDark(next);document.documentElement.dataset.theme=next?'dark':'light';safeStorageSet('theme',next?'dark':'light');document.querySelector('meta[name="theme-color"]')?.setAttribute('content',next?'#101e22':'#07515a');}
+  return <button type="button" onClick={toggle} aria-pressed={dark} aria-label={dark?'Ativar modo claro':'Ativar modo escuro'} title={dark?'Modo claro':'Modo escuro'} className="p-2 rounded-xl text-slate-600 hover:bg-slate-100 transition">{dark?<Sun className="w-5 h-5"/>:<Moon className="w-5 h-5"/>}</button>;
+}
+
 function AuthScreen() {
   const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
@@ -1714,6 +1721,7 @@ function AuthScreen() {
   }
   return <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
     <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-7 space-y-5">
+      <div className="flex justify-end"><ThemeToggle /></div>
       <div className="text-center"><img src="/logo-bravadesk.svg" alt="BravaDesk" className="mx-auto mb-3 w-16 h-16 rounded-2xl object-contain" /><h1 className="text-2xl font-bold">BravaDesk</h1><p className="text-sm text-slate-500">Central de Serviços e Demandas Corporativas</p></div>
       <div className="flex gap-2 justify-center text-sm">{[['login','Entrar'],['register','Cadastrar'],['reset','Recuperar senha']].map(([value,label])=><button key={value} type="button" onClick={()=>{setMode(value);setNotice('');}} className={'px-3 py-2 rounded-lg '+(mode===value?'bg-indigo-600 text-white':'bg-slate-100')}>{label}</button>)}</div>
       <form onSubmit={submit} className="space-y-3">
@@ -1780,6 +1788,7 @@ function HeaderBar({
             </button>
           )}
 
+          <ThemeToggle />
           {/* Toggle de Som */}
           <button
             type="button"
@@ -2227,15 +2236,15 @@ function AdminDashboardBI({
       </div>
 
       {/* Dashboard executivo - referência verde petróleo */}
-      <section className="rounded-3xl p-3 sm:p-4 space-y-4" style={{backgroundColor:'#416267'}}>
+      <section className="bd-dashboard rounded-3xl p-3 sm:p-4 space-y-4" style={{backgroundColor:'#416267'}}>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           <div className="lg:col-span-2 space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {[['Pendente',pending,'Aguardando solicitante'],['Aberto',opened.length,'Aberturas no período'],['Fechado',closed.length,'Conclusões no período'],['Meta',rate===null?'—':fmt(rate)+'%','Base: 85%']].map(([label,value,detail])=>(
-                <div key={label} className="bg-white rounded-2xl px-2 py-3 text-center min-w-0" style={{color:'#416267'}}>
+                <div key={label} className="bd-metric bg-white rounded-2xl px-2 py-3 text-center min-w-0" style={{color:'#416267'}}>
                   <div className="text-lg sm:text-xl font-normal">{label}</div>
                   <div className="text-3xl xl:text-5xl font-normal tabular-nums mt-1">{value}</div>
-                  {label==='Meta' && delta!==null && <div className="text-sm font-semibold" style={{color:delta>=0?'#15803d':'#b74724'}}>{delta>=0?'↑ +':'↓ '}{fmt(delta)}%</div>}
+                  {label==='Meta' && delta!==null && <div className={"text-sm font-semibold "+(delta>=0?"bd-meta-positive":"bd-meta-negative")} style={{color:delta>=0?'#15803d':'#b74724'}}>{delta>=0?'↑ +':'↓ '}{fmt(delta)}%</div>}
                   <p className="text-[10px] mt-1 text-slate-500">{detail}</p>
                 </div>
               ))}
@@ -2255,7 +2264,7 @@ function AdminDashboardBI({
           </div>
         </div>
         <div className="bg-white rounded-2xl p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-2"><h3 className="text-sm font-bold text-slate-700">Evolução mensal · últimos 12 meses</h3><div className="flex flex-wrap gap-3 text-xs text-slate-600"><span style={{color:'#b74724'}}>━ Chamados atrasados</span><span style={{color:'#416267'}}>■ Abertos mês</span><span style={{color:'#104f59'}}>■ Fechados mês</span></div></div>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2"><h3 className="text-sm font-bold text-slate-700">Evolução mensal · últimos 12 meses</h3><div className="bd-month-legend flex flex-wrap gap-3 text-xs text-slate-600"><span style={{color:'#b74724'}}>━ Chamados atrasados</span><span style={{color:'#416267'}}>■ Abertos mês</span><span style={{color:'#104f59'}}>■ Fechados mês</span></div></div>
           <div className="overflow-x-auto"><svg viewBox="0 0 930 238" className="w-full min-w-[650px]" role="img" aria-label="Comparativo mensal de aberturas, conclusões e atrasos">
             {[0,1,2,3,4].map(i=>{const value=axisMax*i/4;return <g key={i}><line x1="34" x2="914" y1={chartY(value)} y2={chartY(value)} stroke="#e2e8f0"/><text x="28" y={chartY(value)+4} fontSize="10" textAnchor="end" fill="#64748b">{value}</text></g>;})}
             {months.map((m,i)=><g key={i}><rect x={chartX(i)-22} y={chartY(m.opened)} width="20" height={200-chartY(m.opened)} fill="#416267"><title>{m.label}: {m.opened} abertos</title></rect><rect x={chartX(i)+1} y={chartY(m.closed)} width="20" height={200-chartY(m.closed)} fill="#104f59"><title>{m.label}: {m.closed} fechados</title></rect><text x={chartX(i)} y="219" textAnchor="middle" fontSize="11" fill="#475569">{m.label}</text></g>)}
@@ -4656,18 +4665,61 @@ function RedeemInvite({onDone}) {
  return <details className="bg-white border rounded-lg p-3 mt-2 text-sm"><summary>Tenho um convite de equipe</summary><form className="flex flex-wrap gap-2 mt-2" onSubmit={async e=>{e.preventDefault();const {error}=await supabase.rpc('bd_redeem_invite',{p_code:code});setMsg(error?.message||'Convite ativado');if(!error)await onDone();}}><input className="border rounded p-2 flex-1" required placeholder="Código individual" value={code} onChange={e=>setCode(e.target.value)}/><button className="bg-indigo-600 text-white p-2 rounded">Ativar</button></form><p role="status">{msg}</p></details>;
 }
 function NotificationPreferences({userId,soundEnabled,setSoundEnabled}) {
- const [vibration,setVibration]=useState(()=>safeStorageGet('vibration:'+userId,true)),[msg,setMsg]=useState('');
- const [enabled,setEnabled]=useState(false);
- const configure=async (on)=>{try{
-  if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)) throw Error('Push indisponível neste navegador.');
-  const reg=await navigator.serviceWorker.ready;let sub=await reg.pushManager.getSubscription();
-  if(!on){if(sub){const {error}=await supabase.rpc('bd_remove_device',{p_endpoint:sub.endpoint});if(error)throw error;await sub.unsubscribe();}setEnabled(false);setMsg('Push desativado neste dispositivo.');return;}
-  const key=import.meta.env.VITE_VAPID_PUBLIC_KEY;if(!key)throw Error('Push ainda não configurado na Vercel.');
-  if(await Notification.requestPermission()!=='granted')throw Error('Permissão de notificações não concedida.');
-  const raw=atob(key.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(key.length/4)*4,'='));
-  if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:Uint8Array.from(raw,c=>c.charCodeAt(0))});
-  const {error}=await supabase.rpc('bd_save_device',{p_subscription:sub.toJSON()});if(error)throw error;setEnabled(true);setMsg('Dispositivo registrado para push.');
- }catch(e){setMsg(e.message);}};
- useEffect(()=>{if('serviceWorker' in navigator)navigator.serviceWorker.getRegistration().then(async r=>{if(r?.pushManager)setEnabled(Boolean(await r.pushManager.getSubscription()));}).catch(()=>{});},[userId]);
- return <details className="bg-white border rounded-lg p-3 text-sm"><summary className="font-semibold">Preferências de notificações</summary><div className="flex flex-wrap gap-4 mt-3"><label><input type="checkbox" checked={soundEnabled} onChange={e=>setSoundEnabled(e.target.checked)}/> Som</label><label><input type="checkbox" checked={vibration} onChange={e=>{setVibration(e.target.checked);safeStorageSet('vibration:'+userId,e.target.checked);}}/> Vibração</label><button className="underline" onClick={()=>configure(true)}>{enabled?'Registrar push nesta conta':'Ativar push'}</button><button className="underline" onClick={()=>configure(false)}>Desativar push</button><button className="underline" onClick={()=>{playGentleChime(soundEnabled);if(vibration)navigator.vibrate?.([150,80,150]);setMsg('Teste local solicitado. O aparelho pode bloquear som ou vibração.');}}>Testar som e vibração</button></div><p role="status" className="text-xs mt-2">{msg}</p></details>;
+  const [vibration,setVibration]=useState(()=>safeStorageGet('vibration:'+userId,true));
+  const [msg,setMsg]=useState(''),[enabled,setEnabled]=useState(false),[busy,setBusy]=useState(false),[prompt,setPrompt]=useState(false),[permission,setPermission]=useState(()=>typeof Notification==='undefined'?'unsupported':Notification.permission);
+  const supported='serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const registrationKey='pushRegistered:'+userId, snoozeKey='pushSnooze:'+userId;
+  const key=import.meta.env.VITE_VAPID_PUBLIC_KEY;
+  function dismiss(){safeStorageSet(snoozeKey,Date.now()+86400000);setPrompt(false);}
+  async function registration(){const reg=await navigator.serviceWorker.getRegistration();if(!reg)throw Error('Aplicativo ainda não está pronto para push. Atualize a página e tente novamente.');return reg.active?reg:await Promise.race([navigator.serviceWorker.ready,new Promise((_,reject)=>setTimeout(()=>reject(Error('Service Worker ainda não está ativo. Atualize a página.')),8000))]);}
+  async function configure(on){
+    if(busy)return;setBusy(true);setMsg('');
+    try{
+      if(!supported)throw Error('Push indisponível neste navegador. No iPhone, instale pela tela de início e abra o aplicativo instalado.');
+      if(on){
+        if(!key)throw Error('Push ainda não configurado na Vercel.');
+        // A permissão é solicitada diretamente no clique, antes de outras operações assíncronas.
+        const perm=Notification.permission==='granted'?'granted':await Notification.requestPermission();setPermission(perm);
+        if(perm!=='granted')throw Error(perm==='denied'?'Notificações bloqueadas. Libere nas configurações do navegador ou do celular.':'Permissão não concedida. Você pode tentar novamente.');
+      }
+      const reg=await registration();let sub=await reg.pushManager.getSubscription();
+      if(!on){if(sub){const {error}=await supabase.rpc('bd_remove_device',{p_endpoint:sub.endpoint});if(error)throw error;await sub.unsubscribe();}safeStorageSet(registrationKey,null);setEnabled(false);dismiss();setMsg('Push desativado neste dispositivo.');return;}
+      const raw=atob(key.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(key.length/4)*4,'='));
+      if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:Uint8Array.from(raw,c=>c.charCodeAt(0))});
+      const {error}=await supabase.rpc('bd_save_device',{p_subscription:sub.toJSON()});if(error)throw error;
+      safeStorageSet(registrationKey,sub.endpoint);safeStorageSet(snoozeKey,0);setEnabled(true);setPrompt(false);setMsg('Dispositivo registrado para push.');
+    }catch(e){setMsg(e.message||'Não foi possível configurar as notificações.');}finally{setBusy(false);}
+  }
+  useEffect(()=>{
+    let alive=true;
+    async function check(){
+      if(!supported||!key)return;
+      try {const reg=await navigator.serviceWorker.getRegistration();const sub=await reg?.pushManager?.getSubscription();if(!alive)return;
+        const perm=Notification.permission;setPermission(perm);
+        const active=perm==='granted'&&!!sub&&safeStorageGet(registrationKey,null)===sub.endpoint;
+        if(perm==='granted'&&sub&&!active){
+          // Revalida uma inscrição antiga nesta conta sem pedir permissão novamente.
+          const {error}=await supabase.rpc('bd_save_device',{p_subscription:sub.toJSON()});if(!alive)return;
+          if(!error){safeStorageSet(registrationKey,sub.endpoint);setEnabled(true);return;}
+          setMsg(error.message);
+        }
+        setEnabled(active);if(!active&&Date.now()>=Number(safeStorageGet(snoozeKey,0)))setPrompt(true);
+      }catch(e){if(alive)setMsg(e.message);}
+    }
+    check();return()=>{alive=false;};
+  },[userId]);
+  useEffect(()=>{if(!prompt)return;const listener=e=>{if(e.key==='Escape'&&!busy)dismiss();};window.addEventListener('keydown',listener);return()=>window.removeEventListener('keydown',listener);},[prompt,busy]);
+  const status=enabled?'Notificações ativadas':permission==='denied'?'Notificações bloqueadas':!supported?'Push indisponível neste navegador':!key?'Push não configurado':'Notificações desativadas';
+  return <>
+    <details className="bg-white border border-slate-200 rounded-xl p-3 text-sm"><summary className="font-semibold cursor-pointer"><span className="inline-flex items-center gap-2"><BellRing className="w-4 h-4 text-indigo-600"/> Preferências de notificações <span className={'text-xs '+(enabled?'text-emerald-700':'text-amber-700')}>· {status}</span></span></summary>
+      <div className="flex flex-wrap gap-4 mt-3 items-center"><label><input type="checkbox" checked={soundEnabled} onChange={e=>setSoundEnabled(e.target.checked)}/> Som</label><label><input type="checkbox" checked={vibration} onChange={e=>{setVibration(e.target.checked);safeStorageSet('vibration:'+userId,e.target.checked);}}/> Vibração</label><button disabled={busy} className="underline text-indigo-700" onClick={()=>configure(true)}>{enabled?'Registrar novamente':'Ativar push'}</button><button disabled={busy} className="underline" onClick={()=>configure(false)}>Desativar push</button><button className="underline" onClick={()=>{playGentleChime(soundEnabled);if(vibration)navigator.vibrate?.([150,80,150]);setMsg('Teste local solicitado. O aparelho pode bloquear som ou vibração.');}}>Testar som e vibração</button></div><p role="status" className="text-xs mt-2">{msg}</p>
+    </details>
+    {prompt&&<div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4" onClick={e=>{if(e.target===e.currentTarget&&!busy)dismiss();}}><section role="dialog" aria-modal="true" aria-labelledby="bd-push-title" className="w-full max-w-sm max-h-[90vh] overflow-y-auto bg-white border border-slate-200 rounded-3xl shadow-xl p-6 space-y-4 text-slate-900">
+      <div className="mx-auto w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center"><BellRing className="w-8 h-8 text-indigo-700"/></div><h2 id="bd-push-title" className="text-xl font-bold text-center">Não perca nenhuma atualização!</h2><p className="text-sm text-slate-600 text-center">Receba avisos do BravaDesk mesmo com o aplicativo fechado.</p>
+      <div className="space-y-2 text-sm text-slate-700"><p className="flex items-center gap-2"><MessageSquare className="w-4 h-4 text-indigo-600"/> Novas respostas nos chamados</p><p className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-indigo-600"/> Atualizações e aprovações</p><p className="flex items-center gap-2"><Volume2 className="w-4 h-4 text-indigo-600"/> Som e vibração conforme seu aparelho</p></div>
+      {permission==='denied'&&<p className="text-xs text-amber-700 bg-amber-50 rounded-lg p-3">Permissão bloqueada. Abra as configurações do navegador ou do celular, permita notificações para o BravaDesk e tente novamente.</p>}
+      {msg&&<p className="text-xs text-slate-600" role="status">{msg}</p>}
+      <button autoFocus type="button" disabled={busy} onClick={()=>configure(true)} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl py-3 disabled:opacity-50">{busy?'Ativando…':'Ativar notificações'}</button><button type="button" disabled={busy} onClick={dismiss} className="w-full text-sm text-slate-500 py-2">Agora não</button><p className="text-center text-xs text-slate-500">Você pode alterar essa preferência a qualquer momento.</p>
+    </section></div>}
+  </>;
 }

@@ -12,3 +12,110 @@
   --color-indigo-900: #042e34;
   --color-indigo-950: #021e22;
 }
+
+/* BravaDesk 0.7.1 — tema escuro local, sem alteração de dados. */
+:root[data-theme="dark"] { color-scheme: dark; background:#101e22; color:#e6f0f1; }
+:root[data-theme="dark"] body { background:#101e22; color:#e6f0f1; }
+:root[data-theme="dark"] [class~="bg-white"] { background-color: #192c31; }
+:root[data-theme="dark"] [class~="bg-white/95"] { background-color: rgba(25,44,49,.96); }
+:root[data-theme="dark"] [class~="bg-slate-50"] { background-color: #101e22; }
+:root[data-theme="dark"] [class~="bg-slate-50/70"] { background-color: #14262b; }
+:root[data-theme="dark"] [class~="bg-slate-50/80"] { background-color: #14262b; }
+:root[data-theme="dark"] [class~="bg-slate-100"] { background-color: #243a40; }
+:root[data-theme="dark"] [class~="bg-slate-100/80"] { background-color: #243a40; }
+:root[data-theme="dark"] [class~="bg-slate-200"] { background-color: #30494f; }
+:root[data-theme="dark"] [class~="bg-slate-200/70"] { background-color: #30494f; }
+:root[data-theme="dark"] [class~="text-slate-900"] { color: #eef7f7; }
+:root[data-theme="dark"] [class~="text-slate-800"] { color: #e2eeee; }
+:root[data-theme="dark"] [class~="text-slate-700"] { color: #cfdee0; }
+:root[data-theme="dark"] [class~="text-slate-600"] { color: #b8cbd0; }
+:root[data-theme="dark"] [class~="text-slate-500"] { color: #a0b7bc; }
+:root[data-theme="dark"] [class~="text-slate-400"] { color: #8da8ae; }
+:root[data-theme="dark"] [class~="text-slate-300"] { color: #78949a; }
+:root[data-theme="dark"] [class~="border-slate-100"] { border-color: #2c4248; }
+:root[data-theme="dark"] [class~="border-slate-200"] { border-color: #31494f; }
+:root[data-theme="dark"] [class~="border-slate-300"] { border-color: #466168; }
+:root[data-theme="dark"] [class~="divide-slate-100"] { border-color: #31494f; }
+:root[data-theme="dark"] [class~="bg-amber-100"] { background-color: #392d18; }
+:root[data-theme="dark"] [class~="bg-amber-200"] { background-color: #392d18; }
+:root[data-theme="dark"] [class~="bg-amber-200/80"] { background-color: #392d18; }
+:root[data-theme="dark"] [class~="bg-amber-50"] { background-color: #392d18; }
+:root[data-theme="dark"] [class~="bg-amber-50/50"] { background-color: #392d18; }
+:root[data-theme="dark"] [class~="bg-amber-50/60"] { background-color: #392d18; }
+:root[data-theme="dark"] [class~="bg-amber-50/90"] { background-color: #392d18; }
+:root[data-theme="dark"] [class~="bg-blue-50"] { background-color: #1c3048; }
+:root[data-theme="dark"] [class~="bg-emerald-100"] { background-color: #17372e; }
+:root[data-theme="dark"] [class~="bg-emerald-50"] { background-color: #17372e; }
+:root[data-theme="dark"] [class~="bg-emerald-50/60"] { background-color: #17372e; }
+:root[data-theme="dark"] [class~="bg-indigo-100"] { background-color: #153c42; }
+:root[data-theme="dark"] [class~="bg-indigo-50"] { background-color: #153c42; }
+:root[data-theme="dark"] [class~="bg-indigo-50/50"] { background-color: #153c42; }
+:root[data-theme="dark"] [class~="bg-indigo-50/80"] { background-color: #153c42; }
+:root[data-theme="dark"] [class~="bg-orange-50"] { background-color: #422d20; }
+:root[data-theme="dark"] [class~="bg-purple-100"] { background-color: #302843; }
+:root[data-theme="dark"] [class~="bg-purple-200"] { background-color: #302843; }
+:root[data-theme="dark"] [class~="bg-purple-50"] { background-color: #302843; }
+:root[data-theme="dark"] [class~="bg-red-50"] { background-color: #472828; }
+:root[data-theme="dark"] [class~="bg-rose-100"] { background-color: #432633; }
+:root[data-theme="dark"] [class~="bg-rose-50"] { background-color: #432633; }
+:root[data-theme="dark"] [class~="bg-sky-50"] { background-color: #203844; }
+:root[data-theme="dark"] [class~="border-amber-200"] { border-color: #796039; }
+:root[data-theme="dark"] [class~="border-amber-300"] { border-color: #796039; }
+:root[data-theme="dark"] [class~="border-blue-200"] { border-color: #426185; }
+:root[data-theme="dark"] [class~="border-emerald-200"] { border-color: #426c59; }
+:root[data-theme="dark"] [class~="border-emerald-200/80"] { border-color: #426c59; }
+:root[data-theme="dark"] [class~="border-emerald-300"] { border-color: #426c59; }
+:root[data-theme="dark"] [class~="border-indigo-200"] { border-color: #416c72; }
+:root[data-theme="dark"] [class~="border-indigo-300"] { border-color: #416c72; }
+:root[data-theme="dark"] [class~="border-indigo-400"] { border-color: #416c72; }
+:root[data-theme="dark"] [class~="border-orange-200"] { border-color: #815839; }
+:root[data-theme="dark"] [class~="border-purple-200"] { border-color: #65517d; }
+:root[data-theme="dark"] [class~="border-purple-300"] { border-color: #65517d; }
+:root[data-theme="dark"] [class~="border-red-300"] { border-color: #875454; }
+:root[data-theme="dark"] [class~="border-rose-200"] { border-color: #80505e; }
+:root[data-theme="dark"] [class~="border-sky-200"] { border-color: #416877; }
+:root[data-theme="dark"] [class~="text-amber-600"] { color: #f7ce85; }
+:root[data-theme="dark"] [class~="text-amber-700"] { color: #f7ce85; }
+:root[data-theme="dark"] [class~="text-amber-800"] { color: #f7ce85; }
+:root[data-theme="dark"] [class~="text-amber-900"] { color: #f7ce85; }
+:root[data-theme="dark"] [class~="text-amber-950"] { color: #f7ce85; }
+:root[data-theme="dark"] [class~="text-blue-700"] { color: #a6ccff; }
+:root[data-theme="dark"] [class~="text-emerald-600"] { color: #8be0bb; }
+:root[data-theme="dark"] [class~="text-emerald-700"] { color: #8be0bb; }
+:root[data-theme="dark"] [class~="text-emerald-800"] { color: #8be0bb; }
+:root[data-theme="dark"] [class~="text-emerald-900"] { color: #8be0bb; }
+:root[data-theme="dark"] [class~="text-emerald-950"] { color: #8be0bb; }
+:root[data-theme="dark"] [class~="text-indigo-600"] { color: #8dd9dd; }
+:root[data-theme="dark"] [class~="text-indigo-700"] { color: #8dd9dd; }
+:root[data-theme="dark"] [class~="text-indigo-800"] { color: #8dd9dd; }
+:root[data-theme="dark"] [class~="text-indigo-950"] { color: #8dd9dd; }
+:root[data-theme="dark"] [class~="text-orange-700"] { color: #ffc49b; }
+:root[data-theme="dark"] [class~="text-purple-600"] { color: #dbc1ff; }
+:root[data-theme="dark"] [class~="text-purple-700"] { color: #dbc1ff; }
+:root[data-theme="dark"] [class~="text-purple-900"] { color: #dbc1ff; }
+:root[data-theme="dark"] [class~="text-purple-950"] { color: #dbc1ff; }
+:root[data-theme="dark"] [class~="text-red-700"] { color: #ffb7b7; }
+:root[data-theme="dark"] [class~="text-red-900"] { color: #ffb7b7; }
+:root[data-theme="dark"] [class~="text-rose-700"] { color: #ffc0d3; }
+:root[data-theme="dark"] [class~="text-sky-700"] { color: #a5ddf6; }
+
+:root[data-theme="dark"] [class~="hover:bg-slate-100"]:hover {background:#30494f;}
+:root[data-theme="dark"] [class~="hover:bg-slate-50"]:hover {background:#243a40;}
+:root[data-theme="dark"] [class~="hover:bg-indigo-100"]:hover {background:#24535a;}
+:root[data-theme="dark"] :is(input,select,textarea):not([type="checkbox"]):not([type="radio"]):not([type="range"]) {background:#14262b;color:#e6f0f1;border-color:#466168;}
+:root[data-theme="dark"] :is(input,textarea)::placeholder {color:#95aeb3;}
+:root[data-theme="dark"] [class~="border"], :root[data-theme="dark"] [class~="border-t"] {border-color:#31494f;}
+:root[data-theme="dark"] [class~="divide-slate-100"] > :not(:last-child) {border-color:#31494f;}
+:root[data-theme="dark"] .bd-dashboard {background:#122f35 !important;}
+:root[data-theme="dark"] .bd-metric {color:#b8d8dc !important;}
+:root[data-theme="dark"] .bd-meta-positive {color:#8be0bb !important;}
+:root[data-theme="dark"] .bd-meta-negative {color:#ffad8b !important;}
+:root[data-theme="dark"] svg[aria-label="Comparativo mensal de aberturas, conclusões e atrasos"] text {fill:#b8cbd0;}
+:root[data-theme="dark"] svg[aria-label="Comparativo mensal de aberturas, conclusões e atrasos"] line {stroke:#31494f;}
+:root[data-theme="dark"] svg[aria-label="Comparativo mensal de aberturas, conclusões e atrasos"] rect[fill="#416267"] {fill:#86a9ad;}
+:root[data-theme="dark"] svg[aria-label="Comparativo mensal de aberturas, conclusões e atrasos"] rect[fill="#104f59"] {fill:#28808a;}
+:root[data-theme="dark"] svg[aria-label="Comparativo mensal de aberturas, conclusões e atrasos"] polyline {stroke:#ff9874;}
+:root[data-theme="dark"] svg[aria-label="Comparativo mensal de aberturas, conclusões e atrasos"] circle {fill:#ff9874;}
+:root[data-theme="dark"] .bd-month-legend span:nth-child(1) {color:#ff9874 !important;}
+:root[data-theme="dark"] .bd-month-legend span:nth-child(2) {color:#86a9ad !important;}
+:root[data-theme="dark"] .bd-month-legend span:nth-child(3) {color:#60bdc6 !important;}
