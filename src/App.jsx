@@ -25,7 +25,6 @@ import {
   ShieldCheck,
   UserPlus,
   Mail,
-  Webhook,
   Smartphone,
   Share,
   PlusSquare,
@@ -152,11 +151,7 @@ const DEPARTMENTS = [
 ];
 
 const DEFAULT_SETTINGS = {
-  techInviteCode: '',
-  adminInviteCode: '',
   allowedDomains: '', // Vazio por padrão para permitir uso imediato; configurável pelo Admin
-  webhookUrl: '',
-  webhookSecret: '',
   categories: DEFAULT_CATEGORIES,
   // Etapas adicionais permanecem vinculadas ao fluxo principal para preservar SLA e aprovações.
   customStages: []
@@ -220,6 +215,7 @@ const PRIORITY_META = {
 };
 
 const ROLE_META = {
+  super_admin: {label:'Super Admin',shortLabel:'Super Admin',badgeClass:'bg-indigo-600 text-white'},
   admin: {
     label: 'Admin do Marketing',
     shortLabel: 'Admin',
@@ -392,12 +388,15 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
 /**
  * Alerta sonoro suave sintetizado via Web Audio API (sem dependências externas)
  */
+let bravaAudioContext;
+function unlockBravaAudio(){try{const C=window.AudioContext||window.webkitAudioContext;if(C){bravaAudioContext||=new C();bravaAudioContext.resume().catch(()=>{});}}catch{}}
 function playGentleChime(enabled) {
   if (!enabled) return;
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const ctx = bravaAudioContext || (bravaAudioContext = new AudioCtx());
+    if(ctx.state!=='running') {ctx.resume().catch(()=>{});}
     const now = ctx.currentTime;
 
     const notes = [880, 1174.66]; // Lá5 -> Ré6 harmônico suave
@@ -433,8 +432,8 @@ function generateAppIconDataUrl(size) {
     if (!ctx) return '';
 
     const grad = ctx.createLinearGradient(0, 0, size, size);
-    grad.addColorStop(0, '#4f46e5');
-    grad.addColorStop(1, '#312e81');
+    grad.addColorStop(0, '#07515a');
+    grad.addColorStop(1, '#04383f');
 
     const radius = size * 0.22;
     ctx.beginPath();
@@ -458,7 +457,7 @@ function generateAppIconDataUrl(size) {
     ctx.textBaseline = 'middle';
     ctx.fillText('MKT', size / 2, size * 0.48);
 
-    ctx.fillStyle = '#a5b4fc';
+    ctx.fillStyle = '#a4d0d3';
     ctx.font = `600 ${Math.round(size * 0.12)}px system-ui, -apple-system, sans-serif`;
     ctx.fillText('DESK', size / 2, size * 0.74);
 
@@ -481,7 +480,6 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [notifications, setNotifications] = useState([]);
-  const [emailLogs, setEmailLogs] = useState([]);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [currentUserId, setCurrentUserId] = useState(null);
   const currentUser = useMemo(
@@ -520,6 +518,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(()=>{window.addEventListener('pointerdown',unlockBravaAudio);return()=>window.removeEventListener('pointerdown',unlockBravaAudio);},[]);
   // Preferência de áudio é local; dados corporativos NUNCA usam localStorage.
   useEffect(() => safeStorageSet('soundEnabled', soundEnabled), [soundEnabled]);
 
@@ -547,7 +546,6 @@ export default function App() {
       supabase.from('profiles').select('id,role,active,data,created_at'),
       supabase.from('tickets').select('id,data'),
       supabase.from('notifications').select('id,data'),
-      supabase.from('email_logs').select('id,data'),
       supabase.from('app_settings').select('data').eq('id', 1).maybeSingle()
     ]);
     const errors = results.filter((r) => r.error).map((r) => r.error.message);
@@ -556,13 +554,12 @@ export default function App() {
     setUsers(results[0].data.map((r) => ({...r.data, id:r.id, role:r.role, active:r.active, createdAt:r.created_at})));
     setTickets(results[1].data.map((r) => ({...r.data, id:r.id})));
     setNotifications(results[2].data.map((r) => ({...r.data, id:r.id})));
-    setEmailLogs(results[3].data.map((r) => ({...r.data, id:r.id})));
-    setSettings({...DEFAULT_SETTINGS, ...(results[4].data?.data || {}), categories:results[4].data?.data?.categories || DEFAULT_CATEGORIES, customStages:results[4].data?.data?.customStages || []});
+    setSettings({...DEFAULT_SETTINGS, ...(results[3].data?.data || {}), categories:results[3].data?.data?.categories || DEFAULT_CATEGORIES, customStages:results[3].data?.data?.customStages || []});
   }, [authUser?.id]);
 
   useEffect(() => {
     if (!authUser || !supabaseConfigured) {
-      setUsers([]); setTickets([]); setNotifications([]); setEmailLogs([]);
+      setUsers([]); setTickets([]); setNotifications([]);
       return;
     }
     reloadData();
@@ -571,7 +568,6 @@ export default function App() {
       .on('postgres_changes', { event:'*', schema:'public', table:'profiles' }, reloadData)
       .on('postgres_changes', { event:'*', schema:'public', table:'tickets' }, reloadData)
       .on('postgres_changes', { event:'*', schema:'public', table:'notifications' }, reloadData)
-      .on('postgres_changes', { event:'*', schema:'public', table:'email_logs' }, reloadData)
       .on('postgres_changes', { event:'*', schema:'public', table:'app_settings' }, reloadData)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -594,11 +590,12 @@ export default function App() {
 
       const payload = { id: value.id, data: value, ...extras };
       const { data: changed, error } = existing
-        ? await supabase.from(table).update(payload).eq('id', value.id).select('id')
-        : await supabase.from(table).insert(payload).select('id');
+        ? await supabase.from(table).update(payload).eq('id', value.id).select('id,data')
+        : await supabase.from(table).insert(payload).select('id,data');
       if (error) throw error;
       if (!changed?.length) throw new Error('Registro não foi salvo. Confira as permissões no Supabase.');
       await reloadData();
+      return changed[0].data;
     } catch (error) {
       setDataError(`Falha ao salvar ${table}: ${error.message || String(error)}`);
       throw error;
@@ -618,10 +615,12 @@ export default function App() {
     await reloadData();
   }, [users, reloadData]);
   const persistTicketDoc = useCallback(async (obj) => {
-    await saveRecord('tickets', obj, {requester_id:obj.requesterId});
+    const saved = await saveRecord('tickets', obj, {requester_id:obj.requesterId});
+    try { const {data:{session}} = await supabase.auth.getSession(); if(session) await fetch('/api/push', {method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.access_token},body:JSON.stringify({ticketId:obj.id})}); } catch {}
+    return saved;
   }, [saveRecord]);
   const handleSetCustomStage = async (ticket, stageId) => {
-    if (!currentUser || !['admin','tecnico'].includes(currentUser.role)) return;
+    if (!currentUser || !['admin','super_admin','tecnico'].includes(currentUser.role)) return;
     const stage = (settings.customStages || []).find(x => x.id === stageId && x.active !== false);
     if (stageId && (!stage || stage.baseStatus !== ticket.status)) return;
     await persistTicketDoc({
@@ -632,12 +631,9 @@ export default function App() {
   const persistNotificationDoc = useCallback(async (obj) => {
     await saveRecord('notifications', obj, {user_id:obj.userId});
   }, [saveRecord]);
-  const persistEmailLogDoc = useCallback(async (obj) => {
-    await saveRecord('email_logs', obj);
-  }, [saveRecord]);
   const persistSettingsDoc = useCallback(async (obj) => {
     // Chaves privadas de serviços externos NÃO podem ficar no frontend.
-    const {webhookSecret:_secret, webhookUrl:_url, ...publicSettings} = obj;
+    const {webhookSecret:_secret, webhookUrl:_url, techInviteCode:_t, adminInviteCode:_a, ...publicSettings} = obj;
     const {error} = await supabase.from('app_settings').upsert({id:1, data:publicSettings});
     if (error) { setDataError(error.message); throw error; }
     await reloadData();
@@ -688,34 +684,6 @@ export default function App() {
         appleLink.setAttribute('href', icon192);
       }
 
-      const manifestObj = {
-        name: 'BravaDesk — Central de Serviços e Demandas Corporativas',
-        short_name: 'BravaDesk',
-        description: 'Central de Serviços e Demandas Corporativas',
-        start_url: '.',
-        display: 'standalone',
-        background_color: '#f8fafc',
-        theme_color: '#07515a',
-        icons: [
-          icon192 && { src: icon192, sizes: '192x192', type: 'image/png' },
-          icon512 && { src: icon512, sizes: '512x512', type: 'image/png' }
-        ].filter(Boolean)
-      };
-
-      const blob = new Blob([JSON.stringify(manifestObj)], {
-        type: 'application/manifest+json'
-      });
-      const manifestUrl = URL.createObjectURL(blob);
-
-      let manifestLink = document.querySelector('link[rel="manifest"]');
-      if (!manifestLink) {
-        manifestLink = document.createElement('link');
-        manifestLink.setAttribute('rel', 'manifest');
-        document.head.appendChild(manifestLink);
-      }
-      manifestLink.setAttribute('href', manifestUrl);
-
-      return () => URL.revokeObjectURL(manifestUrl);
     } catch {
       // Ignora restrições de DOM em previews isolados
     }
@@ -794,135 +762,14 @@ export default function App() {
     }
   }, []);
 
-  const dispatchNotificationAndWebhook = useCallback(
-    async ({
-      recipientUserIds = [],
-      recipientEmails = [],
-      eventType,
-      title,
-      message,
-      ticket = null,
-      popupType = 'info'
-    }) => {
-      const nowIso = new Date().toISOString();
-
-      // 1. Grava notificações internas para os destinatários
-      const uniqueUserIds = Array.from(new Set(recipientUserIds.filter(Boolean)));
-      for (const uid of uniqueUserIds) {
-        const notif = {
-          id: generateId('ntf'),
-          userId: uid,
-          title,
-          message,
-          ticketId: ticket ? ticket.id : null,
-          protocol: ticket ? ticket.protocol : null,
-          type: popupType,
-          read: false,
-          createdAt: nowIso
-        };
-        await persistNotificationDoc(notif);
-      }
-
-      // 2. Se o usuário atualmente logado está entre os destinatários, exibe pop-up + som
-      if (currentUser && uniqueUserIds.includes(currentUser.id)) {
-        showFloatingPopup({
-          title,
-          message,
-          type: popupType,
-          ticketId: ticket ? ticket.id : null,
-          withSound: true
-        });
-        sendBrowserNativeNotification(`BravaDesk • ${title}`, message);
-      }
-
-      // 3. Dispara Webhook real (n8n / Make / Zapier / API) se configurado e registra na Caixa de Saída
-      const emailsList = Array.from(new Set(recipientEmails.filter(Boolean)));
-      if (emailsList.length > 0 || eventType === 'WEBHOOK_TEST') {
-        const payload = {
-          system: 'MktDesk',
-          event: eventType,
-          timestamp: nowIso,
-          recipients: emailsList,
-          subject: `[BravaDesk] ${title}`,
-          body: message,
-          ticket: ticket
-            ? {
-                id: ticket.id,
-                protocol: ticket.protocol,
-                title: ticket.title,
-                category: ticket.categoryName,
-                priority: ticket.priority,
-                status: ticket.status,
-                department: ticket.department,
-                requesterName: ticket.requesterName,
-                requesterEmail: ticket.requesterEmail,
-                assignedTechName: ticket.assignedTechName || null
-              }
-            : null
-        };
-
-        let deliveryStatus = 'Registrado (Webhook não configurado)';
-        if (false) { // Desativado: configurar envio na Edge Function, não expor secrets no browser.
-          try {
-            const headers = { 'Content-Type': 'application/json' };
-            if (settings.webhookSecret && settings.webhookSecret.trim()) {
-              headers['X-MktDesk-Secret'] = settings.webhookSecret.trim();
-            }
-            const res = await fetch(settings.webhookUrl.trim(), {
-              method: 'POST',
-              headers,
-              body: JSON.stringify(payload)
-            });
-            deliveryStatus = res.ok
-              ? `Enviado via Webhook (HTTP ${res.status})`
-              : `Falha Webhook (HTTP ${res.status})`;
-          } catch (err) {
-            deliveryStatus = `Erro de rede Webhook (${err.message || 'CORS/Offline'})`;
-          }
-        }
-
-        const logEntry = {
-          id: generateId('eml'),
-          createdAt: nowIso,
-          eventType,
-          recipients: emailsList.length > 0 ? emailsList : ['teste@webhook.local'],
-          subject: `[BravaDesk] ${title}`,
-          message,
-          protocol: ticket ? ticket.protocol : 'SISTEMA',
-          deliveryStatus,
-          payload
-        };
-        await persistEmailLogDoc(logEntry);
-      }
-    },
-    [
-      currentUser,
-      persistEmailLogDoc,
-      persistNotificationDoc,
-      sendBrowserNativeNotification,
-      settings.webhookSecret,
-      settings.webhookUrl,
-      showFloatingPopup
-    ]
-  );
+  // As notificações de chamados são criadas pelo trigger no banco.
 
   /**
    * --------------------------------------------------------------------------
    * OPERAÇÕES DE NEGÓCIO (CHAMADOS, SAC, APROVAÇÃO, CSAT, EQUIPE)
    * --------------------------------------------------------------------------
    */
-  const generateNextProtocol = useCallback(() => {
-    if (!tickets || tickets.length === 0) return '#MKT-1001';
-    let maxNum = 1000;
-    tickets.forEach((t) => {
-      const match = String(t.protocol || '').match(/(\d+)/);
-      if (match) {
-        const n = parseInt(match[1], 10);
-        if (!Number.isNaN(n) && n > maxNum) maxNum = n;
-      }
-    });
-    return `#MKT-${maxNum + 1}`;
-  }, [tickets]);
+  const generateNextProtocol = () => 'Gerado ao salvar';
 
   const handleCreateTicket = async (formData) => {
     if (!currentUser) return;
@@ -935,7 +782,7 @@ export default function App() {
       settings.categories.find(c => c.active !== false) ||
       DEFAULT_CATEGORIES[0];
 
-    const protocol = generateNextProtocol();
+    let protocol = null;
     const nowIso = new Date().toISOString();
 
     const newTicket = {
@@ -972,29 +819,22 @@ export default function App() {
           authorId: currentUser.id,
           authorName: currentUser.name,
           authorRole: currentUser.role,
-          content: `Demanda aberta com protocolo ${protocol} • Categoria: ${categoryObj.name} (SLA: ${categoryObj.slaHours}h).`,
+          content: `Demanda aberta • Categoria: ${categoryObj.name} (SLA: ${categoryObj.slaHours}h).`,
           createdAt: nowIso
         }
       ]
     };
 
-    await persistTicketDoc(newTicket);
+    const savedTicket = await persistTicketDoc(newTicket);
+    protocol = savedTicket.protocol;
+    newTicket.protocol = protocol;
     setShowNewTicketModal(false);
     setActiveTicketId(newTicket.id);
 
     // Notifica toda a equipe de Marketing (Admins + Técnicos ativos)
     const mktTeam = users.filter(
-      (u) => u.active !== false && (u.role === 'admin' || u.role === 'tecnico')
+      (u) => u.active !== false && (['admin','super_admin'].includes(u.role) || u.role === 'tecnico')
     );
-    await dispatchNotificationAndWebhook({
-      recipientUserIds: mktTeam.map((u) => u.id),
-      recipientEmails: mktTeam.map((u) => u.email),
-      eventType: 'TICKET_CREATED',
-      title: `Nova Demanda ${protocol}`,
-      message: `${currentUser.name} (${newTicket.department}) abriu: "${newTicket.title}"`,
-      ticket: newTicket,
-      popupType: 'info'
-    });
 
     showFloatingPopup({
       title: `Demanda ${protocol} Registrada`,
@@ -1040,15 +880,6 @@ export default function App() {
     await persistTicketDoc(updated);
 
     if (tech) {
-      await dispatchNotificationAndWebhook({
-        recipientUserIds: [tech.id, ticket.requesterId],
-        recipientEmails: [tech.email, ticket.requesterEmail],
-        eventType: 'TICKET_ASSIGNED',
-        title: `${ticket.protocol} Assumido`,
-        message: `${tech.name} agora é o responsável pela demanda "${ticket.title}".`,
-        ticket: updated,
-        popupType: 'info'
-      });
     }
   };
 
@@ -1056,7 +887,7 @@ export default function App() {
     if (!currentUser || !content.trim()) return;
     const nowIso = new Date().toISOString();
     const isMarketingStaff =
-      currentUser.role === 'admin' || currentUser.role === 'tecnico';
+      ['admin','super_admin'].includes(currentUser.role) || currentUser.role === 'tecnico';
 
     const entry = {
       id: generateId('msg'),
@@ -1095,27 +926,9 @@ export default function App() {
     if (currentUser.id === ticket.requesterId) {
       const targets = ticket.assignedTechId
         ? users.filter((u) => u.id === ticket.assignedTechId)
-        : users.filter((u) => u.role === 'admin' || u.role === 'tecnico');
-      await dispatchNotificationAndWebhook({
-        recipientUserIds: targets.map((u) => u.id),
-        recipientEmails: targets.map((u) => u.email),
-        eventType: 'TICKET_REPLY',
-        title: `Nova Mensagem em ${ticket.protocol}`,
-        message: `${currentUser.name}: "${content.trim().slice(0, 90)}"`,
-        ticket: updated,
-        popupType: 'info'
-      });
+        : users.filter((u) => ['admin','super_admin'].includes(u.role) || u.role === 'tecnico');
     } else {
       const reqUser = users.find((u) => u.id === ticket.requesterId);
-      await dispatchNotificationAndWebhook({
-        recipientUserIds: reqUser ? [reqUser.id] : [],
-        recipientEmails: [ticket.requesterEmail],
-        eventType: 'TICKET_REPLY',
-        title: `Resposta do Marketing • ${ticket.protocol}`,
-        message: `${currentUser.name}: "${content.trim().slice(0, 90)}"`,
-        ticket: updated,
-        popupType: 'info'
-      });
     }
   };
 
@@ -1151,17 +964,6 @@ export default function App() {
     await persistTicketDoc(updated);
 
     const reqUser = users.find((u) => u.id === ticket.requesterId);
-    await dispatchNotificationAndWebhook({
-      recipientUserIds: reqUser ? [reqUser.id] : [],
-      recipientEmails: [ticket.requesterEmail],
-      eventType: 'SAC_PAUSED',
-      title: `Ação Necessária (SAC) • ${ticket.protocol}`,
-      message: `${currentUser.name} pausou a demanda e aguarda sua informação: "${questionText
-        .trim()
-        .slice(0, 90)}"`,
-      ticket: updated,
-      popupType: 'warning'
-    });
 
     showFloatingPopup({
       title: `SAC Pausado • ${ticket.protocol}`,
@@ -1208,17 +1010,8 @@ export default function App() {
 
     const targets = ticket.assignedTechId
       ? users.filter((u) => u.id === ticket.assignedTechId)
-      : users.filter((u) => u.role === 'admin' || u.role === 'tecnico');
+      : users.filter((u) => ['admin','super_admin'].includes(u.role) || u.role === 'tecnico');
 
-    await dispatchNotificationAndWebhook({
-      recipientUserIds: targets.map((u) => u.id),
-      recipientEmails: targets.map((u) => u.email),
-      eventType: 'SAC_UNLOCKED',
-      title: `Demanda Destravada • ${ticket.protocol}`,
-      message: `${currentUser.name} respondeu a pendência e retomou a produção.`,
-      ticket: updated,
-      popupType: 'success'
-    });
 
     showFloatingPopup({
       title: `Demanda ${ticket.protocol} Destravada`,
@@ -1269,15 +1062,6 @@ export default function App() {
     await persistTicketDoc(updated);
 
     const reqUser = users.find((u) => u.id === ticket.requesterId);
-    await dispatchNotificationAndWebhook({
-      recipientUserIds: reqUser ? [reqUser.id] : [],
-      recipientEmails: [ticket.requesterEmail],
-      eventType: 'DELIVERY_READY',
-      title: `Entrega Pronta para Aprovação • ${ticket.protocol}`,
-      message: `${currentUser.name} enviou o material de "${ticket.title}" para sua validação.`,
-      ticket: updated,
-      popupType: 'success'
-    });
 
     showFloatingPopup({
       title: `Entrega Enviada • ${ticket.protocol}`,
@@ -1321,17 +1105,8 @@ export default function App() {
     await persistTicketDoc(updated);
 
     const targets = users.filter(
-      (u) => u.id === ticket.assignedTechId || u.role === 'admin'
+      (u) => u.id === ticket.assignedTechId || ['admin','super_admin'].includes(u.role)
     );
-    await dispatchNotificationAndWebhook({
-      recipientUserIds: targets.map((u) => u.id),
-      recipientEmails: targets.map((u) => u.email),
-      eventType: 'TICKET_APPROVED',
-      title: `Entrega Aprovada (${rating}★) • ${ticket.protocol}`,
-      message: `${currentUser.name} aprovou "${ticket.title}" e avaliou o atendimento.`,
-      ticket: updated,
-      popupType: 'success'
-    });
 
     showFloatingPopup({
       title: `Demanda ${ticket.protocol} Concluída!`,
@@ -1370,17 +1145,8 @@ export default function App() {
 
     const targets = ticket.assignedTechId
       ? users.filter((u) => u.id === ticket.assignedTechId)
-      : users.filter((u) => u.role === 'admin' || u.role === 'tecnico');
+      : users.filter((u) => ['admin','super_admin'].includes(u.role) || u.role === 'tecnico');
 
-    await dispatchNotificationAndWebhook({
-      recipientUserIds: targets.map((u) => u.id),
-      recipientEmails: targets.map((u) => u.email),
-      eventType: 'ADJUSTMENT_REQUESTED',
-      title: `Ajustes Solicitados • ${ticket.protocol}`,
-      message: `${currentUser.name} pediu ajustes em "${ticket.title}".`,
-      ticket: updated,
-      popupType: 'warning'
-    });
 
     showFloatingPopup({
       title: `Solicitação de Ajustes Enviada`,
@@ -1404,19 +1170,10 @@ export default function App() {
     );
     const protocols = pausedTickets.map((t) => t.protocol).join(', ');
 
-    await dispatchNotificationAndWebhook({
-      recipientUserIds: reqIds,
-      recipientEmails: reqEmails,
-      eventType: 'SAC_REMINDER',
-      title: `Cobrança de Pendência SAC • ${deptName}`,
-      message: `O Marketing aguarda retorno nas demandas (${protocols}) para destravar a produção.`,
-      ticket: pausedTickets[0],
-      popupType: 'warning'
-    });
 
     showFloatingPopup({
-      title: `Cobrança Disparada (${deptName})`,
-      message: `Pop-up e alerta de e-mail enviados para ${reqEmails.length} solicitante(s) (${protocols}).`,
+      title: 'Lembrete manual indisponível',
+      message: 'O lembrete manual ainda não está disponível nesta versão.',
       type: 'success'
     });
   };
@@ -1432,6 +1189,23 @@ export default function App() {
       .filter((n) => n.userId === currentUser.id)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }, [notifications, currentUser]);
+
+  const seenNotifications = useRef({user:null, ids:new Set(), ready:false});
+  useEffect(() => {
+    if (!currentUser) { seenNotifications.current = {user:null,ids:new Set(),ready:false}; return; }
+    const seen = seenNotifications.current;
+    if (seen.user !== currentUser.id || !seen.ready) {
+      seenNotifications.current = {user:currentUser.id,ids:new Set(myNotifications.map(n=>n.id)),ready:true}; return;
+    }
+    for(const n of myNotifications) if(!seen.ids.has(n.id)) {
+      seen.ids.add(n.id);
+      if(!n.read && document.visibilityState==='visible') {
+        showFloatingPopup({title:n.title,message:n.message,ticketId:n.ticketId,type:n.type});
+        if(safeStorageGet('vibration:'+currentUser.id,true)) navigator.vibrate?.([140,70,140]);
+      }
+    }
+  }, [myNotifications,currentUser?.id,showFloatingPopup]);
+  useEffect(()=>{ const id=new URLSearchParams(location.search).get('ticket'); if(id && currentUser && tickets.some(t=>t.id===id)) {setActiveTicketId(id);history.replaceState(null,'',location.pathname);} },[tickets,currentUser?.id]);
 
   const unreadCount = useMemo(
     () => myNotifications.filter((n) => !n.read).length,
@@ -1477,7 +1251,7 @@ export default function App() {
             <p>Seu perfil não está disponível ou foi bloqueado. Se acabou de confirmar o e-mail, atualize a página.</p>
             <button className="text-indigo-700 underline" onClick={() => supabase.auth.signOut()}>Sair</button>
           </div>
-        ) : <AuthScreen />}
+        ) : <><AuthScreen /><div className="fixed bottom-4 right-4 z-30"><button type="button" onClick={triggerPWAInstall} className="bg-indigo-600 text-white rounded-xl px-4 py-3 text-sm shadow-lg">Instalar BravaDesk</button></div></>}
         <ToastPopups
           popups={popups}
           onDismiss={(id) => setPopups((prev) => prev.filter((p) => p.id !== id))}
@@ -1513,11 +1287,12 @@ export default function App() {
         onToggleSound={() => setSoundEnabled((v) => !v)}
         onOpenNotifications={() => setShowNotificationsDrawer((v) => !v)}
         onLogout={async () => {
+          try { const reg=await navigator.serviceWorker?.getRegistration(); const sub=await reg?.pushManager?.getSubscription(); if(sub){ await supabase.rpc('bd_remove_device',{p_endpoint:sub.endpoint}); await sub.unsubscribe(); } } catch {}
           await supabase.auth.signOut();
           setActiveTicketId(null);
           setShowNotificationsDrawer(false);
         }}
-        canInstallPWA={Boolean(deferredInstallPrompt) || (isIOSDevice && !isStandalonePWA)}
+        canInstallPWA={!isStandalonePWA}
         onInstallPWA={triggerPWAInstall}
       />
 
@@ -1530,8 +1305,9 @@ export default function App() {
         </div>
       )}
 
+      <div className="max-w-7xl w-full mx-auto px-4 py-2"><NotificationPreferences key={currentUser.id} userId={currentUser.id} soundEnabled={soundEnabled} setSoundEnabled={setSoundEnabled}/>{currentUser.role==='solicitante' && <RedeemInvite onDone={reloadData}/>}</div>
       {/* BARRA DE NAVEGAÇÃO SUPERIOR (DESKTOP) POR PERFIL */}
-      {currentUser.role === 'admin' && (
+      {['admin','super_admin'].includes(currentUser.role) && (
         <div className="hidden md:block bg-white border-b border-slate-200 sticky top-16 z-20">
           <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
             <nav className="flex space-x-1 py-2">
@@ -1674,7 +1450,7 @@ export default function App() {
       {/* CONTEÚDO PRINCIPAL POR PERFIL */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-7">
         {/* ======================== PAINEL ADMIN ======================== */}
-        {currentUser.role === 'admin' && (
+        {['admin','super_admin'].includes(currentUser.role) && (
           <>
             {adminTab === 'bi' && (
               <AdminDashboardBI
@@ -1721,11 +1497,10 @@ export default function App() {
             {adminTab === 'config' && (
               <AdminSettingsPanel
                 settings={settings}
-                emailLogs={emailLogs}
                 users={users}
                 tickets={tickets}
                 notifications={notifications}
-                canInstallPWA={Boolean(deferredInstallPrompt) || (isIOSDevice && !isStandalonePWA)}
+                canInstallPWA={!isStandalonePWA}
                 isStandalonePWA={isStandalonePWA}
                 onInstallPWA={triggerPWAInstall}
                 onSaveSettings={async (updated) => {
@@ -1756,16 +1531,6 @@ export default function App() {
                     'BravaDesk • Teste de Notificação',
                     'As notificações nativas estão ativas.'
                   );
-                }}
-                onTestWebhook={async () => {
-                  await dispatchNotificationAndWebhook({
-                    recipientUserIds: [currentUser.id],
-                    recipientEmails: [currentUser.email],
-                    eventType: 'WEBHOOK_TEST',
-                    title: 'Teste de Integração Webhook & E-mail',
-                    message: `Disparo de verificação executado por ${currentUser.name}.`,
-                    popupType: 'success'
-                  });
                 }}
                 onRestoreBackup={async (backupData) => {
                   if (Array.isArray(backupData.users)) {
@@ -1938,7 +1703,7 @@ function AuthScreen() {
           options:{data:{name:name.trim(), department, jobTitle:jobTitle.trim()}}
         });
         if (error) throw error;
-        setNotice(data.session ? 'Conta criada. Entrando…' : 'Cadastro recebido. Verifique seu e-mail para confirmar a conta. O administrador poderá atribuir sua função.');
+        setNotice(data.session ? 'Conta criada. Entrando…' : 'Cadastro recebido. Verifique seu e-mail para confirmar a conta. Use seu convite individual após entrar, se houver.');
       } else {
         const {error} = await supabase.auth.resetPasswordForEmail(email.trim());
         if (error) throw error;
@@ -1958,7 +1723,7 @@ function AuthScreen() {
         {notice&&<p role="status" className="text-sm text-indigo-800 bg-indigo-50 p-3 rounded-lg">{notice}</p>}
         <button disabled={pending} className="bg-indigo-600 text-white py-3 rounded-lg w-full font-semibold disabled:opacity-50">{pending?'Processando…':mode==='login'?'Entrar':mode==='register'?'Criar conta':'Enviar recuperação'}</button>
       </form>
-      <p className="text-xs text-slate-500 text-center">Novas contas recebem o perfil Solicitante. Um administrador pode promover usuários para Técnico ou Admin.</p>
+      <p className="text-xs text-slate-500 text-center">Novas contas recebem o perfil Solicitante. Use um convite individual após entrar para ativar seu perfil de equipe.</p>
     </div>
   </div>;
 }
@@ -2103,7 +1868,7 @@ function MobileBottomNav({
   tickets,
   onOpenNewTicket
 }) {
-  if (currentUser.role === 'admin') {
+  if (['admin','super_admin'].includes(currentUser.role)) {
     const items = [
       { id: 'bi', label: 'BI', icon: LayoutDashboard },
       { id: 'torre', label: 'Torre', icon: Kanban },
@@ -2279,7 +2044,7 @@ function AdminDashboardBI({
   // Scorecards da Equipe Técnica
   const techScorecards = useMemo(() => {
     const staff = users.filter(
-      (u) => u.role === 'tecnico' || u.role === 'admin'
+      (u) => u.role === 'tecnico' || ['admin','super_admin'].includes(u.role)
     );
     return staff.map((member) => {
       const assigned = filteredTickets.filter(
@@ -2684,7 +2449,7 @@ function AdminTeamManager({
 
   const activeAdminsCount = useMemo(
     () =>
-      users.filter((u) => u.role === 'admin' && u.active !== false).length,
+      users.filter((u) => ['admin','super_admin'].includes(u.role) && u.active !== false).length,
     [users]
   );
 
@@ -2704,7 +2469,7 @@ function AdminTeamManager({
 
   const handleRoleChange = async (targetUser, nextRole) => {
     if (
-      targetUser.role === 'admin' &&
+      ['admin','super_admin'].includes(targetUser.role) &&
       nextRole !== 'admin' &&
       activeAdminsCount <= 1
     ) {
@@ -2724,7 +2489,7 @@ function AdminTeamManager({
 
   const handleToggleActive = (targetUser) => {
     const nextActive = targetUser.active === false;
-    if (!nextActive && targetUser.role === 'admin' && activeAdminsCount <= 1) {
+    if (!nextActive && ['admin','super_admin'].includes(targetUser.role) && activeAdminsCount <= 1) {
       onNotify(
         'Ação Bloqueada',
         'Não é possível bloquear o único Administrador ativo.',
@@ -2757,56 +2522,7 @@ function AdminTeamManager({
 
   return (
     <div className="space-y-6">
-      {/* Banner de Códigos de Convite Rápidos */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-extrabold text-slate-900">
-            Equipe & Controle de Acessos
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Gerencie perfis, bloqueios ou compartilhe os códigos de convite para
-            autocadastro da equipe.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            type="button"
-            onClick={() => handleCopyCode(settings.techInviteCode, 'Técnico')}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition"
-          >
-            {copiedCode === 'Técnico' ? (
-              <Check className="w-3.5 h-3.5 text-emerald-600" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
-            )}
-            Convite Técnico: <code>{settings.techInviteCode}</code>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleCopyCode(settings.adminInviteCode, 'Admin')}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-xs font-semibold transition"
-          >
-            {copiedCode === 'Admin' ? (
-              <Check className="w-3.5 h-3.5 text-emerald-600" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
-            )}
-            Convite Admin: <code>{settings.adminInviteCode}</code>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition"
-          >
-            <UserPlus className="w-4 h-4" />
-            Cadastrar Usuário
-          </button>
-        </div>
-      </div>
-
+      <InviteManager currentUser={currentUser} />
       {/* Busca e Lista de Usuários */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
         <div className="p-4 border-b border-slate-200 flex items-center gap-3">
@@ -2855,16 +2571,19 @@ function AdminTeamManager({
                 <div className="flex items-center gap-2.5 self-end sm:self-center">
                   <select
                     value={u.role}
+                    disabled={u.role==='super_admin' || (u.role==='admin' && currentUser.role!=='super_admin')}
                     onChange={(e) => handleRoleChange(u, e.target.value)}
                     className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value="solicitante">Solicitante</option>
-                    <option value="tecnico">Técnico do Marketing</option>
-                    <option value="admin">Admin do Marketing</option>
+                    <option value="tecnico" disabled={u.role!=='tecnico'}>Técnico do Marketing</option>
+                    <option value="admin" disabled={u.role!=='admin'}>Admin do Marketing</option>
+                    <option value="super_admin" disabled>Super Admin</option>
                   </select>
 
                   <button
                     type="button"
+                    disabled={u.role==='super_admin' || (u.role==='admin' && currentUser.role!=='super_admin')}
                     onClick={() => handleToggleActive(u)}
                     className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
                       isBlocked
@@ -2891,141 +2610,6 @@ function AdminTeamManager({
         </div>
       </div>
 
-      {/* Modal de Cadastro Direto */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4">
-          <div className="bg-white w-full h-[100dvh] sm:h-auto sm:max-w-lg sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between shrink-0">
-              <h3 className="font-extrabold text-slate-900">
-                Cadastrar Novo Usuário
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowAddModal(false)}
-                className="p-2 rounded-xl text-slate-400 hover:bg-slate-100"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={handleCreateDirectUser}
-              className="flex-1 overflow-y-auto p-5 space-y-4"
-            >
-              {formErr && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs">
-                  {formErr}
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Nome Completo *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  E-mail Corporativo *
-                </label>
-                <input
-                  type="email"
-                  required
-                  value={newEmail}
-                  onChange={(e) => setNewEmail(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    Departamento
-                  </label>
-                  <select
-                    value={newDept}
-                    onChange={(e) => setNewDept(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-sm bg-white"
-                  >
-                    {DEPARTMENTS.map((d) => (
-                      <option key={d} value={d}>
-                        {d}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    Cargo *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    Perfil
-                  </label>
-                  <select
-                    value={newRole}
-                    onChange={(e) => setNewRole(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-sm bg-white"
-                  >
-                    <option value="tecnico">Técnico do Marketing</option>
-                    <option value="solicitante">Solicitante</option>
-                    <option value="admin">Admin do Marketing</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    Senha Inicial *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={newPass}
-                    onChange={(e) => setNewPass(e.target.value)}
-                    placeholder="Mín. 6 caracteres"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-slate-200 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold"
-                >
-                  Salvar Cadastro
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -3037,7 +2621,6 @@ function AdminTeamManager({
  */
 function AdminSettingsPanel({
   settings,
-  emailLogs,
   users,
   tickets,
   notifications,
@@ -3046,7 +2629,6 @@ function AdminSettingsPanel({
   onInstallPWA,
   onSaveSettings,
   onTestPopupAndSound,
-  onTestWebhook,
   onRestoreBackup,
   onRequestConfirm
 }) {
@@ -3109,8 +2691,7 @@ function AdminSettingsPanel({
       users,
       tickets,
       notifications,
-      emailLogs,
-      settings: draft
+          settings: draft
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: 'application/json'
@@ -3164,10 +2745,10 @@ function AdminSettingsPanel({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-extrabold text-slate-900">
-              Governança, Convites & Integrações
+              Configurações gerais e notificações
             </h2>
             <p className="text-xs text-slate-500">
-              Configurações legadas de cadastro e integrações. Códigos compartilhados não concedem permissões no Supabase.
+              Convites individuais estão disponíveis na aba Equipe.
             </p>
           </div>
           <button
@@ -3179,85 +2760,6 @@ function AdminSettingsPanel({
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-              Código Convite • Técnico
-            </label>
-            <input
-              type="text"
-              value={draft.techInviteCode}
-              onChange={(e) =>
-                setDraft({ ...draft, techInviteCode: e.target.value })
-              }
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-              Código Convite • Admin
-            </label>
-            <input
-              type="text"
-              value={draft.adminInviteCode}
-              onChange={(e) =>
-                setDraft({ ...draft, adminInviteCode: e.target.value })
-              }
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-mono"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-              Domínios Corporativos (Opcional)
-            </label>
-            <input
-              type="text"
-              value={draft.allowedDomains}
-              onChange={(e) =>
-                setDraft({ ...draft, allowedDomains: e.target.value })
-              }
-              placeholder="Vazio = qualquer domínio (ex: @empresa.com.br)"
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm"
-            />
-          </div>
-        </div>
-
-        {/* Webhook de E-mail Real (n8n / Make / Zapier / API) */}
-        <div className="pt-4 border-t border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="md:col-span-2">
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-              URL do Webhook para Disparo Real de E-mails (n8n / Make / Zapier /
-              API)
-            </label>
-            <input
-              type="url"
-              value={draft.webhookUrl}
-              onChange={(e) =>
-                setDraft({ ...draft, webhookUrl: e.target.value })
-              }
-              placeholder="https://seu-n8n.empresa.com/webhook/mktdesk-email"
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-              Header Secret (X-MktDesk-Secret)
-            </label>
-            <input
-              type="text"
-              value={draft.webhookSecret || ''}
-              onChange={(e) =>
-                setDraft({ ...draft, webhookSecret: e.target.value })
-              }
-              placeholder="Opcional"
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm"
-            />
-          </div>
-        </div>
-
         <div className="flex flex-wrap items-center gap-2.5 pt-2">
           <button
             type="button"
@@ -3266,15 +2768,6 @@ function AdminSettingsPanel({
           >
             <BellRing className="w-4 h-4" />
             Testar Pop-up & Som
-          </button>
-
-          <button
-            type="button"
-            onClick={onTestWebhook}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition"
-          >
-            <Webhook className="w-4 h-4" />
-            Testar Disparo Webhook
           </button>
 
           {canInstallPWA && !isStandalonePWA && (
@@ -3299,6 +2792,8 @@ function AdminSettingsPanel({
 
           <button
             type="button"
+            disabled
+            title="Restauração administrativa indisponível"
             onClick={() => fileInputRef.current?.click()}
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold transition"
           >
@@ -3320,7 +2815,7 @@ function AdminSettingsPanel({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-bold text-indigo-950">Gestão de Serviços e Status</h2>
-            <p className="text-xs text-indigo-700">Versão 0.3 · Catálogo editável e etapas personalizadas · Supabase</p>
+            <p className="text-xs text-indigo-700">Versão 0.7 · BravaDesk · Identidade visual e instalação</p>
           </div>
           <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-indigo-700 border border-indigo-200">Painel do Administrador</span>
         </div>
@@ -3375,55 +2870,6 @@ function AdminSettingsPanel({
         <p className="text-xs text-amber-700 font-semibold">Clique em “Salvar Configurações” para persistir as alterações.</p>
       </section>
 
-      {/* Caixa de Saída Real de E-mails & Webhooks */}
-      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900">
-              Caixa de Saída de E-mails & Disparos Webhook
-            </h3>
-            <p className="text-xs text-slate-500">
-              Histórico real de notificações automáticas disparadas pelo sistema.
-            </p>
-          </div>
-          <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-bold tabular-nums">
-            {emailLogs.length} registros
-          </span>
-        </div>
-
-        {emailLogs.length === 0 ? (
-          <div className="p-8 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-center">
-            <Mail className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-            <p className="text-sm font-semibold text-slate-600">
-              Nenhum disparo registrado ainda
-            </p>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Os alertas de abertura, pausa SAC e entrega aparecerão aqui em
-              tempo real.
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
-            {emailLogs.map((log) => (
-              <div key={log.id} className="py-3 flex flex-col gap-1">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-bold text-xs text-slate-900">
-                    {log.subject}
-                  </span>
-                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700">
-                    {log.deliveryStatus}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600">{log.message}</p>
-                <div className="text-[11px] text-slate-400">
-                  Para: {log.recipients.join(', ')} •{' '}
-                  {formatDateTime(log.createdAt)}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -3555,7 +3001,7 @@ function TicketBoardView({
     () =>
       users.filter(
         (u) =>
-          u.active !== false && (u.role === 'tecnico' || u.role === 'admin')
+          u.active !== false && (u.role === 'tecnico' || ['admin','super_admin'].includes(u.role))
       ),
     [users]
   );
@@ -3653,7 +3099,7 @@ function TicketBoardView({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Protocolo (#MKT-1001), título ou área..."
+              placeholder="Protocolo (#BD-000001), título ou área..."
               className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
@@ -3711,7 +3157,7 @@ function TicketBoardView({
           </h3>
           <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto mt-1">
             {tickets.length === 0
-              ? 'O sistema está limpo e pronto para produção. Abra a primeira demanda para gerar o protocolo #MKT-1001.'
+              ? 'O sistema está limpo e pronto para produção. Abra a primeira demanda para gerar um protocolo automaticamente.'
               : 'Ajuste os filtros acima ou alterne de fila para visualizar outras demandas.'}
           </p>
         </div>
@@ -3773,7 +3219,7 @@ function TicketBoardView({
                   className="flex items-center justify-between sm:justify-end gap-2.5 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100 shrink-0"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {currentUser.role === 'admin' ? (
+                  {['admin','super_admin'].includes(currentUser.role) ? (
                     <select
                       value={t.assignedTechId || ''}
                       onChange={(e) => onAssignTech(t, e.target.value || null)}
@@ -4372,7 +3818,7 @@ function TicketDetailModal({
   onRequestAdjustments
 }) {
   const isStaff =
-    currentUser.role === 'admin' || currentUser.role === 'tecnico';
+    ['admin','super_admin'].includes(currentUser.role) || currentUser.role === 'tecnico';
   const isRequester = currentUser.id === ticket.requesterId;
 
   const sla = calculateTicketSLA(ticket, nowTick);
@@ -4397,7 +3843,7 @@ function TicketDetailModal({
     () =>
       users.filter(
         (u) =>
-          u.active !== false && (u.role === 'tecnico' || u.role === 'admin')
+          u.active !== false && (u.role === 'tecnico' || ['admin','super_admin'].includes(u.role))
       ),
     [users]
   );
@@ -5131,8 +4577,7 @@ function IOSInstallModal({ onClose }) {
           <li className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
             <Share className="w-5 h-5 text-indigo-600 shrink-0" />
             <span>
-              1. Toque no ícone de <strong>Compartilhar</strong> na barra do
-              Safari (ou menu do navegador).
+              1. No iPhone, abra no Safari e toque em <strong>Compartilhar</strong>. No Android, abra no Chrome e toque no menu ⋮.
             </span>
           </li>
           <li className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
@@ -5199,4 +4644,30 @@ function ConfirmDialogModal({
       </div>
     </div>
   );
+}
+function InviteManager({currentUser}) {
+ const [email,setEmail]=useState(''),[role,setRole]=useState('tecnico'),[code,setCode]=useState(''),[msg,setMsg]=useState(''),[rows,setRows]=useState([]);
+ const load=async()=>{const {data,error}=await supabase.rpc('bd_list_invites');if(error)setMsg(error.message);else setRows(data||[]);};
+ useEffect(()=>{load();},[]);
+ return <section className="bg-white rounded-2xl border p-4 space-y-3"><h2 className="font-bold">Convites individuais</h2><p className="text-xs text-slate-500">Válidos por 48 horas, uso único e vinculados ao e-mail. Envie o código diretamente ao colaborador.</p><form className="flex flex-wrap gap-2" onSubmit={async e=>{e.preventDefault();setCode('');const {data,error}=await supabase.rpc('bd_create_invite',{p_email:email,p_role:role});if(error)setMsg(error.message);else{setCode(data);setMsg('Convite criado. Copie e compartilhe de forma privada.');load();}}}><input required type="email" placeholder="E-mail do colaborador" className="border rounded-lg p-2" value={email} onChange={e=>setEmail(e.target.value)}/><select className="border rounded-lg p-2" value={role} onChange={e=>setRole(e.target.value)}><option value="tecnico">Técnico</option>{currentUser.role==='super_admin'&&<option value="admin">Administrador</option>}</select><button className="bg-indigo-600 text-white rounded-lg p-2">Gerar convite</button></form>{code&&<input readOnly onFocus={e=>e.target.select()} className="w-full border p-2 rounded font-mono text-xs" value={code}/>}<p role="status" className="text-sm">{msg}</p>{rows.map(r=><div key={r.id} className="flex flex-wrap gap-2 justify-between border-t pt-2 text-xs"><span>{r.email} · {r.role} · {r.used_at?'Usado':r.revoked?'Revogado':new Date(r.expires_at)<new Date()?'Expirado':'Pendente'} · {formatDateTime(r.expires_at)}</span>{!r.used_at&&!r.revoked&&<button className="underline" onClick={async()=>{const {error}=await supabase.rpc('bd_revoke_invite',{p_id:r.id});setMsg(error?.message||'Convite revogado');load();}}>Revogar</button>}</div>)}</section>;
+}
+function RedeemInvite({onDone}) {
+ const [code,setCode]=useState(''),[msg,setMsg]=useState('');
+ return <details className="bg-white border rounded-lg p-3 mt-2 text-sm"><summary>Tenho um convite de equipe</summary><form className="flex flex-wrap gap-2 mt-2" onSubmit={async e=>{e.preventDefault();const {error}=await supabase.rpc('bd_redeem_invite',{p_code:code});setMsg(error?.message||'Convite ativado');if(!error)await onDone();}}><input className="border rounded p-2 flex-1" required placeholder="Código individual" value={code} onChange={e=>setCode(e.target.value)}/><button className="bg-indigo-600 text-white p-2 rounded">Ativar</button></form><p role="status">{msg}</p></details>;
+}
+function NotificationPreferences({userId,soundEnabled,setSoundEnabled}) {
+ const [vibration,setVibration]=useState(()=>safeStorageGet('vibration:'+userId,true)),[msg,setMsg]=useState('');
+ const [enabled,setEnabled]=useState(false);
+ const configure=async (on)=>{try{
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)) throw Error('Push indisponível neste navegador.');
+  const reg=await navigator.serviceWorker.ready;let sub=await reg.pushManager.getSubscription();
+  if(!on){if(sub){const {error}=await supabase.rpc('bd_remove_device',{p_endpoint:sub.endpoint});if(error)throw error;await sub.unsubscribe();}setEnabled(false);setMsg('Push desativado neste dispositivo.');return;}
+  const key=import.meta.env.VITE_VAPID_PUBLIC_KEY;if(!key)throw Error('Push ainda não configurado na Vercel.');
+  if(await Notification.requestPermission()!=='granted')throw Error('Permissão de notificações não concedida.');
+  const raw=atob(key.replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(key.length/4)*4,'='));
+  if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:Uint8Array.from(raw,c=>c.charCodeAt(0))});
+  const {error}=await supabase.rpc('bd_save_device',{p_subscription:sub.toJSON()});if(error)throw error;setEnabled(true);setMsg('Dispositivo registrado para push.');
+ }catch(e){setMsg(e.message);}};
+ useEffect(()=>{if('serviceWorker' in navigator)navigator.serviceWorker.getRegistration().then(async r=>{if(r?.pushManager)setEnabled(Boolean(await r.pushManager.getSubscription()));}).catch(()=>{});},[userId]);
+ return <details className="bg-white border rounded-lg p-3 text-sm"><summary className="font-semibold">Preferências de notificações</summary><div className="flex flex-wrap gap-4 mt-3"><label><input type="checkbox" checked={soundEnabled} onChange={e=>setSoundEnabled(e.target.checked)}/> Som</label><label><input type="checkbox" checked={vibration} onChange={e=>{setVibration(e.target.checked);safeStorageSet('vibration:'+userId,e.target.checked);}}/> Vibração</label><button className="underline" onClick={()=>configure(true)}>{enabled?'Registrar push nesta conta':'Ativar push'}</button><button className="underline" onClick={()=>configure(false)}>Desativar push</button><button className="underline" onClick={()=>{playGentleChime(soundEnabled);if(vibration)navigator.vibrate?.([150,80,150]);setMsg('Teste local solicitado. O aparelho pode bloquear som ou vibração.');}}>Testar som e vibração</button></div><p role="status" className="text-xs mt-2">{msg}</p></details>;
 }
