@@ -1,3 +1,6 @@
+import {Workflow081,MentionPicker,workflowRPC} from './workflow081';
+import {businessState,addBusinessMs} from './business081';
+import { ProductionPanel, ProductionChecklist } from './production08';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Moon, Sun,
@@ -161,6 +164,7 @@ const DEFAULT_SETTINGS = {
 };
 
 const STATUS_META = {
+  cancelado:{label:"Cancelado",shortLabel:"Cancelado",badgeClass:"bg-slate-100 text-slate-700 border-slate-300",dotClass:"bg-slate-400",headerAccent:"border-t-slate-400"},
   novo: {
     label: 'Novo / Triagem',
     shortLabel: 'Novo',
@@ -308,11 +312,13 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
       : 0;
 
   const accumulatedPausedMs = Number(ticket.totalPausedMs || 0);
-  const activeElapsedMs = Math.max(
+  const legacyElapsedMs = Math.max(
     0,
     endRefMs - createdMs - accumulatedPausedMs - currentPauseMs
   );
 
+  const business = businessState(ticket,nowMs);
+  const activeElapsedMs = business ? business.elapsed : legacyElapsedMs;
   const slaHours = Number(ticket.slaHours || 24);
   const slaTargetMs = slaHours * 3600 * 1000;
   const remainingMs = slaTargetMs - activeElapsedMs;
@@ -321,9 +327,12 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
     Math.round((activeElapsedMs / Math.max(1, slaTargetMs)) * 100)
   );
   const isBreached = remainingMs < 0;
+  const deadline = ['aguardando_solicitante','cancelado'].includes(ticket.status) ? null : ticket.businessSchedule ? addBusinessMs(createdMs,slaTargetMs+Number(ticket.businessPausedMs||0),ticket.businessSchedule) : endRefMs+remainingMs;
+  if(ticket.status==='cancelado') return {deadline:null,isPaused:false,isBreached:false,activeElapsedMs,remainingMs,currentPauseMs:0,percentUsed,label:'Cancelado',badgeClass:'bg-slate-100 text-slate-700 border-slate-300'};
 
   if (ticket.status === 'aguardando_solicitante') {
     return {
+      deadline,
       isPaused: true,
       isBreached,
       activeElapsedMs,
@@ -337,6 +346,7 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
 
   if (ticket.status === 'concluido') {
     return {
+      deadline,
       isPaused: false,
       isBreached,
       activeElapsedMs,
@@ -352,6 +362,7 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
 
   if (isBreached) {
     return {
+      deadline,
       isPaused: false,
       isBreached: true,
       activeElapsedMs,
@@ -365,6 +376,7 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
 
   if (remainingMs <= slaTargetMs * 0.25) {
     return {
+      deadline,
       isPaused: false,
       isBreached: false,
       activeElapsedMs,
@@ -377,6 +389,7 @@ function calculateTicketSLA(ticket, nowMs = Date.now()) {
   }
 
   return {
+    deadline,
     isPaused: false,
     isBreached: false,
     activeElapsedMs,
@@ -576,7 +589,7 @@ export default function App() {
     const refresh=()=>reloadData(); const poll=setInterval(refresh,30000); window.addEventListener('focus',refresh); return () => { clearInterval(poll); window.removeEventListener('focus',refresh); supabase.removeChannel(channel); };
   }, [authUser?.id, reloadData]);
 
-  const saveRecord = useCallback(async (table, value, extras = {}) => {
+  const saveRecord = useCallback(async (table, value, extras = {}, expectedUpdatedAt) => {
     if (!supabaseConfigured || !authUser) {
       const error = new Error('Faça login no Supabase para salvar.');
       setDataError(error.message);
@@ -592,11 +605,11 @@ export default function App() {
       if (lookupError) throw lookupError;
 
       const payload = { id: value.id, data: value, ...extras };
-      const { data: changed, error } = existing
-        ? await supabase.from(table).update(payload).eq('id', value.id).select('id,data')
-        : await supabase.from(table).insert(payload).select('id,data');
+      let query=existing?supabase.from(table).update(payload).eq('id',value.id):supabase.from(table).insert(payload);
+      if(existing&&table==='tickets'&&expectedUpdatedAt)query=query.eq('data->>updatedAt',expectedUpdatedAt);
+      const {data:changed,error}=await query.select('id,data');
       if (error) throw error;
-      if (!changed?.length) throw new Error('Registro não foi salvo. Confira as permissões no Supabase.');
+      if (!changed?.length) throw new Error('Registro não foi salvo. Atualize o chamado e confira as permissões; ele pode ter sido alterado por outra pessoa.');
       await reloadData();
       return changed[0].data;
     } catch (error) {
@@ -618,10 +631,10 @@ export default function App() {
     await reloadData();
   }, [users, reloadData]);
   const persistTicketDoc = useCallback(async (obj) => {
-    const saved = await saveRecord('tickets', obj, {requester_id:obj.requesterId});
+    const saved = await saveRecord('tickets', obj, {requester_id:obj.requesterId},tickets.find(t=>t.id===obj.id)?.updatedAt);
     try { const {data:{session}} = await supabase.auth.getSession(); if(session) await fetch('/api/push', {method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.access_token},body:JSON.stringify({ticketId:obj.id})}); } catch {}
     return saved;
-  }, [saveRecord]);
+  }, [saveRecord,tickets]);
   const handleSetCustomStage = async (ticket, stageId) => {
     if (!currentUser || !['admin','super_admin','tecnico'].includes(currentUser.role)) return;
     const stage = (settings.customStages || []).find(x => x.id === stageId && x.active !== false);
@@ -906,7 +919,7 @@ export default function App() {
     });
     if (error) throw error;
     await reloadData();
-    if (!isInternal) {
+    {
       try { const {data:{session}} = await supabase.auth.getSession(); if(session) await fetch('/api/push', {method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.access_token},body:JSON.stringify({ticketId:ticket.id})}); } catch {}
     }
   };
@@ -1001,53 +1014,13 @@ export default function App() {
   };
 
   /**
-   * Enviar Entrega para Aprovação do Solicitante
+   * Enviar para Revisão Interna do Solicitante
    */
   const handleSendDelivery = async (ticket, { deliveryNotes, deliveryLink }) => {
-    if (!currentUser || !deliveryNotes.trim()) return;
-    const nowMs = Date.now();
-    const nowIso = new Date(nowMs).toISOString();
-
-    const pausedDuration =
-      ticket.status === 'aguardando_solicitante' && ticket.sacPausedAt
-        ? Math.max(0, nowMs - new Date(ticket.sacPausedAt).getTime())
-        : 0;
-
-    const updated = {
-      ...ticket,
-      status: 'em_aprovacao',
-      assignedTechId: ticket.assignedTechId || currentUser.id,
-      assignedTechName: ticket.assignedTechName || currentUser.name,
-      firstResponseAt: ticket.firstResponseAt || nowIso,
-      sacPausedAt: null,
-      totalPausedMs: Number(ticket.totalPausedMs || 0) + pausedDuration,
-      deliveryLink: (deliveryLink || '').trim(),
-      updatedAt: nowIso,
-      timeline: [
-        ...ticket.timeline,
-        {
-          id: generateId('msg'),
-          type: 'delivery',
-          authorId: currentUser.id,
-          authorName: currentUser.name,
-          authorRole: currentUser.role,
-          content: deliveryNotes.trim(),
-          deliveryLink: (deliveryLink || '').trim(),
-          createdAt: nowIso
-        }
-      ]
-    };
-
-    await persistTicketDoc(updated);
-
-    const reqUser = users.find((u) => u.id === ticket.requesterId);
-
-    showFloatingPopup({
-      title: `Entrega Enviada • ${ticket.protocol}`,
-      message: 'Aguardando aprovação e avaliação CSAT do solicitante.',
-      type: 'success',
-      ticketId: ticket.id
-    });
+    if (!currentUser || !deliveryNotes.trim()) throw Error('Informe as observações da entrega.');
+    await workflowRPC('bd081_review',{tid:ticket.id,action:'submit',notes:deliveryNotes.trim(),link:(deliveryLink||'').trim()},ticket.id);
+    await reloadData();
+    showFloatingPopup({title:`Revisão interna • ${ticket.protocol}`,message:'Versão enviada à administração do Marketing.',type:'success',ticketId:ticket.id});
   };
 
   /**
@@ -1300,7 +1273,7 @@ export default function App() {
                   id: 'torre',
                   label: 'Torre de Controle & Triagem',
                   icon: Kanban,
-                  badge: tickets.filter((t) => t.status !== 'concluido').length
+                  badge: tickets.filter((t) => !['concluido','cancelado'].includes(t.status)).length
                 },
                 {
                   id: 'equipe',
@@ -1366,14 +1339,14 @@ export default function App() {
                   count: tickets.filter(
                     (t) =>
                       t.assignedTechId === currentUser.id &&
-                      t.status !== 'concluido'
+                      !['concluido','cancelado'].includes(t.status)
                   ).length
                 },
                 {
                   id: 'geral',
                   label: 'Fila Geral Disponível',
                   count: tickets.filter(
-                    (t) => !t.assignedTechId && t.status !== 'concluido'
+                    (t) => !t.assignedTechId && !['concluido','cancelado'].includes(t.status)
                   ).length
                 },
                 {
@@ -1428,6 +1401,7 @@ export default function App() {
 
       {/* CONTEÚDO PRINCIPAL POR PERFIL */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-7">
+        <details className="mb-5 bg-white border border-slate-200 rounded-xl p-3"><summary className="cursor-pointer font-bold text-indigo-700">Central de produção · v0.8.1</summary><div className="mt-3"><ProductionPanel key={currentUser.id} user={currentUser} tickets={tickets} users={users} onSelect={setActiveTicketId} calculateSLA={calculateTicketSLA} nowTick={nowTick}/></div></details>
         {/* ======================== PAINEL ADMIN ======================== */}
         {['admin','super_admin'].includes(currentUser.role) && (
           <>
@@ -1612,6 +1586,7 @@ export default function App() {
       {activeTicket && (
         <TicketDetailModal
           ticket={activeTicket}
+          onRefresh={reloadData}
           departmentCatalog={settings.departments}
           currentUser={currentUser}
           users={users}
@@ -2045,7 +2020,7 @@ function AdminDashboardBI({
       const assigned = filteredTickets.filter(
         (t) => t.assignedTechId === member.id
       );
-      const activeQueue = assigned.filter((t) => t.status !== 'concluido');
+      const activeQueue = assigned.filter((t) => !['concluido','cancelado'].includes(t.status));
       const done = assigned.filter((t) => t.status === 'concluido');
       const inSla = assigned.filter(
         (t) => !calculateTicketSLA(t, nowTick).isBreached
@@ -2143,7 +2118,7 @@ function AdminDashboardBI({
   opened.forEach(t => { const name = settings.categories.find(c => c.id === t.categoryId)?.name || t.categoryName || 'Outros'; serviceCounts.set(name, (serviceCounts.get(name)||0)+1); });
   const ranking = [...serviceCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5);
   const rankMax = Math.max(1,...ranking.map(r=>r[1]));
-  const statusColors = {concluido:'#104f59',em_atendimento:'#7ca2a6',novo:'#a9c5c7',aguardando_solicitante:'#d9a34b',em_aprovacao:'#8b82a5'};
+  const statusColors = {cancelado:'#b3b9bd',concluido:'#104f59',em_atendimento:'#7ca2a6',novo:'#a9c5c7',aguardando_solicitante:'#d9a34b',em_aprovacao:'#8b82a5'};
   const segments = Object.keys(statusColors).map(key=>({key,label:STATUS_META[key].shortLabel,color:statusColors[key],count:opened.filter(t=>t.status===key).length})).filter(x=>x.count);
   let angle = 0;
   const gradient = segments.map(seg=>{ const from=angle; angle += seg.count/opened.length*360; return `${seg.color} ${from}deg ${angle}deg`; }).join(', ');
@@ -2737,6 +2712,8 @@ function AdminSettingsPanel({
 
   return (
     <div className="space-y-6">
+      <section className="bg-white p-5 rounded-xl border border-slate-200 space-y-3"><h3 className="font-bold">Briefing personalizado por serviço</h3><p className="text-xs text-slate-500">Uma pergunta por linha. As respostas serão incorporadas ao briefing do chamado.</p>{draft.categories.map(c=><label key={c.id} className="block text-sm font-semibold">{c.name}<textarea rows={3} className="block w-full border rounded-lg p-2 font-normal" value={(c.briefingQuestions||[]).join('\n')} onChange={e=>setDraft(old=>({...old,categories:old.categories.map(item=>item.id===c.id?{...item,briefingQuestions:e.target.value.split('\n')}:item)}))}/></label>)}<button type="button" className="bg-indigo-600 text-white rounded-lg p-2" onClick={()=>onSaveSettings({...draft,categories:draft.categories.map(c=>({...c,briefingQuestions:(c.briefingQuestions||[]).map(q=>q.trim()).filter(Boolean).slice(0,30)}))})}>Salvar perguntas</button></section>
+
       <section className="bg-white p-5 rounded-2xl border border-slate-200 space-y-3">
         <h2 className="text-lg font-extrabold">Gestão de Departamentos</h2><p className="text-xs text-slate-500">Departamentos solicitantes do Marketing. Desativar não apaga históricos.</p>
         {(draft.departments||[]).map(d=><div key={d.id} className="flex items-center gap-2 border-b border-slate-200 py-2"><span className="flex-1 text-sm">{d.name} · {d.active===false?'Inativo':'Ativo'}</span><button type="button" className="text-indigo-600 text-xs" onClick={()=>{setDeptEdit(d.id);setDeptName(d.name)}}>Editar</button><button type="button" className="text-xs border rounded p-2" onClick={()=>setDraft(old=>({...old,departments:old.departments.map(x=>x.id===d.id?{...x,active:x.active===false}:x)}))}>{d.active===false?'Ativar':'Desativar'}</button></div>)}
@@ -2899,12 +2876,12 @@ function TechWorkspace({
     if (techQueue === 'minha') {
       return tickets.filter(
         (t) =>
-          t.assignedTechId === currentUser.id && t.status !== 'concluido'
+          t.assignedTechId === currentUser.id && !['concluido','cancelado'].includes(t.status)
       );
     }
     if (techQueue === 'geral') {
       return tickets.filter(
-        (t) => !t.assignedTechId && t.status !== 'concluido'
+        (t) => !t.assignedTechId && !['concluido','cancelado'].includes(t.status)
       );
     }
     if (techQueue === 'sac') {
@@ -3037,7 +3014,8 @@ function TicketBoardView({
     'em_atendimento',
     'aguardando_solicitante',
     'em_aprovacao',
-    'concluido'
+    'concluido',
+    'cancelado'
   ];
 
   return (
@@ -3359,7 +3337,7 @@ function RequesterPortal({
   const filtered = useMemo(() => {
     if(filter==='observados') return tickets.filter(t=>t.requesterId!==currentUser.id&&(t.observerIds||[]).includes(currentUser.id));
     if (filter === 'abertos') {
-      return myTickets.filter((t) => t.status !== 'concluido');
+      return myTickets.filter((t) => !['concluido','cancelado'].includes(t.status));
     }
     if (filter === 'sac') {
       return myTickets.filter((t) => t.status === 'aguardando_solicitante');
@@ -3367,6 +3345,7 @@ function RequesterPortal({
     if (filter === 'aprovacao') {
       return myTickets.filter((t) => t.status === 'em_aprovacao');
     }
+    if(filter==='cancelados') return myTickets.filter(t=>t.status==='cancelado');
     if (filter === 'concluidos') {
       return myTickets.filter((t) => t.status === 'concluido');
     }
@@ -3459,7 +3438,7 @@ function RequesterPortal({
           {
             id: 'abertos',
             label: 'Em Andamento',
-            count: myTickets.filter((t) => t.status !== 'concluido').length
+            count: myTickets.filter((t) => !['concluido','cancelado'].includes(t.status)).length
           },
           {
             id: 'sac',
@@ -3477,6 +3456,8 @@ function RequesterPortal({
             count: myTickets.filter((t) => t.status === 'concluido').length
           },
           {
+            id:'cancelados',label:'Cancelados',count:myTickets.filter(t=>t.status==='cancelado').length
+          }, {
             id: 'observados', label: 'Chamados que acompanho', count: observedTickets.length
           }, {
             id: 'todos',
@@ -3602,6 +3583,8 @@ function NewTicketModal({
   const [observerIds,setObserverIds]=useState([]);
   const [objective, setObjective] = useState('');
   const [description, setDescription] = useState('');
+  const [briefingAnswers,setBriefingAnswers]=useState({});
+
   const [referenceLink, setReferenceLink] = useState('');
   const [referenceFiles,setReferenceFiles] = useState([]);
   const [sending,setSending] = useState(false);
@@ -3617,7 +3600,7 @@ function NewTicketModal({
     e.preventDefault();
     if (submitting.current || !title.trim() || !description.trim() || !departments.includes(department)) return;
     submitting.current=true; setSending(true); setSendError('');
-    try { await onSubmit({title,categoryId,priority,department,objective,description,referenceLink,observerIds,referenceFiles}); }
+    try { await onSubmit({title,categoryId,priority,department,objective,description:[description,...(selectedCategory?.briefingQuestions||[]).filter(q=>q.trim()).map((q,i)=>q+": "+(briefingAnswers[categoryId+":"+i]||"Não informado"))].join("\n\n"),referenceLink,observerIds,referenceFiles}); }
     catch(error) {setSendError(error.message || 'Não foi possível abrir o chamado.');}
     finally {submitting.current=false;setSending(false);}
   };
@@ -3768,6 +3751,7 @@ function NewTicketModal({
             />
           </div>
 
+          {(selectedCategory?.briefingQuestions||[]).filter(q=>q.trim()).map((q,i)=><label key={categoryId+':'+i} className="block text-sm font-semibold">{q}<textarea className="block w-full border rounded-lg p-2 font-normal" rows={2} value={briefingAnswers[categoryId+':'+i]||''} onChange={e=>setBriefingAnswers(old=>({...old,[categoryId+':'+i]:e.target.value}))}/></label>)}
           <ReferencePicker files={referenceFiles} onChange={setReferenceFiles} disabled={sending} label="Anexos de referência (opcional)" />
           {sendError && <p role="alert" className="text-red-700 text-sm">{sendError}</p>}
           <div>
@@ -3814,7 +3798,7 @@ function NewTicketModal({
  * ============================================================================
  */
 function TicketDetailModal({
-  ticket, onSaveObservers, departmentCatalog,
+  ticket, onSaveObservers, departmentCatalog, onRefresh,
   currentUser,
   users,
   customStages = [],
@@ -3851,10 +3835,13 @@ function TicketDetailModal({
 
   // Modo de ação operacional: 'chat' | 'sac_pause' | 'deliver' | 'adjust'
   const [actionMode, setActionMode] = useState('chat');
+  const [workflowRefresh,setWorkflowRefresh]=useState(0);
+  const [workflowError,setWorkflowError]=useState('');
+  const [deliveryBusy,setDeliveryBusy]=useState(false);
   const [sacQuestion, setSacQuestion] = useState('');
   const [sacUnlockReply, setSacUnlockReply] = useState('');
   const [deliveryNotes, setDeliveryNotes] = useState('');
-  const [deliveryLink, setDeliveryLink] = useState(ticket.deliveryLink || '');
+  const [deliveryLink, setDeliveryLink] = useState('');
   const [csatRating, setCsatRating] = useState(5);
   const [csatComment, setCsatComment] = useState('');
   const [adjustmentNotes, setAdjustmentNotes] = useState('');
@@ -3923,6 +3910,9 @@ function TicketDetailModal({
 
         {/* Corpo Rolável: Briefing + Barra Técnica + Linha do Tempo */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-slate-50/70">
+          {isStaff && <ProductionChecklist key={ticket.id} ticket={ticket} onReply={text=>{setReplyText(old=>old?old+'\n'+text:text);setActionMode('chat');}}/>}
+          <Workflow081 key={ticket.id} ticket={ticket} user={currentUser} users={users} onRefresh={onRefresh} refreshKey={workflowRefresh}/>
+          {workflowError&&<p role="alert" className="text-red-700 text-xs">{workflowError}</p>}
           {/* Card de Metadados & Briefing */}
           <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -4001,7 +3991,7 @@ function TicketDetailModal({
           </div>
 
           <section className="bg-white p-4 rounded-2xl border border-slate-200 space-y-2"><h3 className="font-bold text-sm">Observadores</h3><p className="text-xs">{(ticket.observerIds||[]).map(id=>users.find(u=>u.id===id)?.name||'Colaborador').join(', ')||'Nenhum observador'}</p>{(isStaff||isRequester)&&<><ObserverPicker users={users} catalog={departmentCatalog} department={ticket.department} requesterId={ticket.requesterId} value={observerDraft} onChange={setObserverDraft}/><button type="button" className="bg-indigo-600 text-white rounded-lg p-2 text-xs" onClick={async()=>{try{await onSaveObservers(observerDraft);}catch(e){alert(e.message);}}}>Salvar observadores</button></>}</section>
-          {isStaff && ticket.status !== 'concluido' && (
+          {isStaff && !['concluido','cancelado'].includes(ticket.status) && (
             <div className="bg-white p-4 rounded-2xl border border-slate-200">
               <label className="block text-xs font-bold text-slate-700 mb-2">Etapa personalizada (opcional)</label>
               <select className="w-full border border-slate-300 rounded-lg p-2 text-sm" value={customStages.some(x=>x.id===ticket.customStageId && x.active!==false && x.baseStatus===ticket.status) ? ticket.customStageId : ''} onChange={e=>onSetCustomStage(e.target.value)}>
@@ -4164,7 +4154,7 @@ function TicketDetailModal({
           )}
 
           {/* BARRA DE AÇÕES TÉCNICAS (PARA TÉCNICO & ADMIN) */}
-          {isStaff && ticket.status !== 'concluido' && (
+          {isStaff && !['concluido','cancelado'].includes(ticket.status) && (
             <div className="bg-white p-4 rounded-2xl border border-slate-200 space-y-3">
               <div className="flex flex-wrap items-center gap-2">
                 {!ticket.assignedTechId && (
@@ -4207,7 +4197,7 @@ function TicketDetailModal({
                   }`}
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  Enviar Entrega para Aprovação
+                  Enviar para Revisão Interna
                 </button>
               </div>
 
@@ -4244,13 +4234,13 @@ function TicketDetailModal({
               {actionMode === 'deliver' && (
                 <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 space-y-2.5">
                   <div className="text-xs font-bold text-emerald-950">
-                    Enviar Entrega Final para Validação do Solicitante
+                    Enviar Material para Revisão do Marketing
                   </div>
                   <input
                     type="url"
                     value={deliveryLink}
                     onChange={(e) => setDeliveryLink(e.target.value)}
-                    placeholder="Link dos arquivos finais (Drive, Figma, Canva, WeTransfer...)"
+                    placeholder="Link dos arquivos no Google Drive"
                     className="w-full px-3 py-2 rounded-xl border border-emerald-300 bg-white text-xs"
                   />
                   <textarea
@@ -4263,16 +4253,17 @@ function TicketDetailModal({
                   <button
                     type="button"
                     onClick={async () => {
-                      if (!deliveryNotes.trim()) return;
+                      if (!deliveryNotes.trim()||deliveryBusy) return;
+                      setDeliveryBusy(true);setWorkflowError('');
                       try {
                         await onSendDelivery({ deliveryNotes, deliveryLink });
-                        setDeliveryNotes('');
+                        setDeliveryNotes('');setDeliveryLink('');setWorkflowRefresh(v=>v+1);
                         setActionMode('chat');
-                      } catch (error) { console.error('Falha ao enviar para aprovação:', error); }
+                      } catch (error) { setWorkflowError(error.message); } finally {setDeliveryBusy(false);}
                     }}
                     className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
                   >
-                    Enviar para Aprovação
+                    {deliveryBusy?'Enviando...':'Enviar para Revisão Interna'}
                   </button>
                 </div>
               )}
@@ -4335,9 +4326,10 @@ function TicketDetailModal({
                           Pausa SAC Solicitada
                         </span>
                       )}
+                      {["cancelled","reopened","adjustment"].includes(item.type)&&<span className="text-[10px] font-bold">{({cancelled:"Cancelamento",reopened:"Reabertura",adjustment:"Ajustes solicitados"})[item.type]}</span>}
                       {isDelivery && (
                         <span className="px-2 py-0.5 rounded-md bg-purple-200 text-purple-950 text-[10px] font-bold">
-                          Entrega Enviada
+                          Entrega Enviada{item.version?` · V${item.version}`:""}
                         </span>
                       )}
                     </div>
@@ -4404,6 +4396,7 @@ function TicketDetailModal({
             </div>
           )}
 
+          <MentionPicker users={users} user={currentUser} ticket={ticket} internal={isInternalNote} value={replyText} onChange={setReplyText} disabled={chatSending}/>
           <ReferencePicker files={replyFiles} onChange={setReplyFiles} disabled={chatSending} label={isInternalNote ? 'Referências privadas do Marketing' : 'Anexar imagem, print ou PDF'} />
           {chatError && <p role="alert" className="text-red-700 text-xs">{chatError}</p>}
           <div className="flex items-center gap-2">

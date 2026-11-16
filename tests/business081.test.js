@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {defaultSchedule as c,businessMs,addBusinessMs,businessState} from '../src/business081.js';
+const h=3600000,dt=s=>Date.parse(s+'-03:00');
+test('full workday excludes one-hour lunch',()=>assert.equal(businessMs(dt('2026-11-16T09:00:00'),dt('2026-11-16T17:30:00'),c),7.5*h));
+test('weekend ignored and deadline on Monday',()=>assert.equal(addBusinessMs(dt('2026-11-13T16:30:00'),2*h,c),dt('2026-11-16T10:00:00')));
+test('holiday ignored',()=>assert.equal(addBusinessMs(dt('2026-11-13T16:30:00'),2*h,{...c,holidays:['2026-11-16']}),dt('2026-11-17T10:00:00')));
+test('cross lunch',()=>assert.equal(addBusinessMs(dt('2026-11-16T11:30:00'),h,c),dt('2026-11-16T13:30:00')));
+test('outside work hours consumes no SLA',()=>assert.equal(businessMs(dt('2026-11-14T09:00:00'),dt('2026-11-15T19:00:00'),c),0));
+test('paused business time only',()=>{const t={createdAt:'2026-11-13T16:30:00-03:00',businessSchedule:c,status:'aguardando_solicitante',sacPausedAt:'2026-11-13T17:00:00-03:00'};assert.equal(businessState(t,dt('2026-11-16T10:00:00')).elapsed,0.5*h)});
+test('accumulated pauses removed and completed clock frozen',()=>{const t={createdAt:'2026-11-16T09:00:00-03:00',completedAt:'2026-11-16T15:00:00-03:00',businessSchedule:c,businessPausedMs:h,status:'concluido'};assert.equal(businessState(t,dt('2026-11-18T15:00:00')).elapsed,4*h)});
+test('legacy does not silently switch SLA',()=>assert.equal(businessState({createdAt:'2026-11-16T09:00:00-03:00'},Date.now()),null));
+test('round-trip across multiple workdays',()=>{const start=dt('2026-11-13T11:00:00'),end=addBusinessMs(start,24*h,c);assert.equal(businessMs(start,end,c),24*h)});
