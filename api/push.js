@@ -1,3 +1,4 @@
+import { sendAnnouncement } from '../lib/announcementPush.js';
 import { createClient } from '@supabase/supabase-js';
 import webpush from 'web-push';
 export default async function handler(req,res){
@@ -16,15 +17,15 @@ export default async function handler(req,res){
   const {data:a,error:ae}=await db.from('bd08_announcements').select('published_by,starts_at,ends_at,push_enabled').eq('id',announcementId).maybeSingle();
   if(ae)throw ae;if(!a||a.published_by!==user.id)return res.status(403).end();
   if(!a.push_enabled||Date.parse(a.starts_at)>Date.now()||(a.ends_at&&Date.parse(a.ends_at)<=Date.now()))return res.status(200).json({ok:true,sent:0});
+  const dispatch=await db.rpc('bd083_dispatch',{p_id:announcementId});if(dispatch.error)throw dispatch.error;
   const queue=await db.from('notifications').select('id,user_id').eq('data->>announcementId',announcementId).eq('data->>bd081Automated','true').is('push_claimed_at',null).limit(20);if(queue.error)throw queue.error;
-  webpush.setVapidDetails(subject,pub,priv);let sent=0,failed=0;
+  webpush.setVapidDetails(subject,pub,priv);
+  const totals={sent:0,failed:0,deferred:0,skipped:0};
   await Promise.all((queue.data||[]).map(async n=>{
-   const claim=await db.from('notifications').update({push_claimed_at:new Date().toISOString()}).eq('id',n.id).is('push_claimed_at',null).select('id');if(claim.error||!claim.data?.length)return;
-   const devices=await db.from('bd_push_devices').select('endpoint,subscription').eq('user_id',n.user_id);if(devices.error){failed++;return;}
-   await Promise.all((devices.data||[]).map(async d=>{try{const u=new URL(d.endpoint);if(d.subscription?.endpoint!==d.endpoint||u.protocol!=='https:'||u.port||u.username||u.password||!(/^(fcm\.googleapis\.com|updates\.push\.services\.mozilla\.com|web\.push\.apple\.com)$/.test(u.hostname)||u.hostname.endsWith('.push.apple.com')||u.hostname.endsWith('.notify.windows.com')))return;
-    await webpush.sendNotification(d.subscription,JSON.stringify({title:'BravaDesk · Comunicado',body:'Novo comunicado disponível no aplicativo.',announcementId,tag:n.id}),{TTL:3600,timeout:3000});sent++;
-   }catch(e){failed++;if([404,410].includes(e.statusCode))await db.from('bd_push_devices').delete().eq('endpoint',d.endpoint).eq('user_id',n.user_id);}}));
-  }));return res.status(200).json({ok:true,sent,failed});
+   const r=await sendAnnouncement(db,webpush,n,announcementId);
+   for(const k of Object.keys(totals))totals[k]+=r[k];
+  }));
+  return res.status(200).json({ok:true,...totals});
  }
  const ticketId=req.body?.ticketId;if(typeof ticketId!=='string'||ticketId.length>100)return res.status(400).end();
  const {data:notes,error:err}=await db.from('notifications').update({push_claimed_at:new Date().toISOString()}).eq('sender_id',user.id).eq('data->>ticketId',ticketId).is('push_claimed_at',null).select('id,user_id');if(err)throw err;

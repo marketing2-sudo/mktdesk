@@ -1,3 +1,9 @@
+# BravaDesk v0.8.4 | Instant Notifications
+
+**Atualização de instalação existente v0.8.3:** leia `ATUALIZACAO-V084.md` primeiro. Não execute novamente os SQLs históricos da pasta `supabase`. Esta atualização não requer migração SQL.
+
+---
+
 # MktDesk com Supabase + Vercel
 
 Versão migrada a partir do MktDesk React original. A interface dos chamados, SLA, BI e Kanban foi preservada. Firebase e armazenamento local de dados corporativos foram substituídos por Supabase Auth e tabelas PostgreSQL com RLS. Preferência de som permanece local.
