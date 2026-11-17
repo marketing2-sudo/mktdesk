@@ -1,4 +1,4 @@
-import {Communication083} from './communication083';
+import {useAnnouncements,AnnouncementBanner,AnnouncementDialog,PremiumSearch,PremiumSidebar} from './premium083.jsx';
 import {Workflow081,MentionPicker,workflowRPC} from './workflow081';
 import {businessState,addBusinessMs,formatSLADuration,formatDeliveryDate,deliveryLabel} from './business081';
 import { ProductionPanel, ProductionChecklist } from './production08';
@@ -497,6 +497,7 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [personalNotifications,setPersonalNotifications]=useState(null);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [currentUserId, setCurrentUserId] = useState(null);
   const currentUser = useMemo(
@@ -504,6 +505,17 @@ export default function App() {
     [users, currentUserId]
   );
 
+  const {rows:announcements,error:announcementError}=useAnnouncements(currentUser);
+  const [announcementId,setAnnouncementId]=useState(null);
+  const [searchOpen,setSearchOpen]=useState(false);
+  const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>safeStorageGet('sidebarCollapsed',false));
+  const [productionOpen,setProductionOpen]=useState(false);
+  const productionRef=useRef(null);
+  const openProduction=()=>{setProductionOpen(true);requestAnimationFrame(()=>productionRef.current?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'}));};
+  useEffect(()=>{const f=e=>{if(currentUser&&(e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();setSearchOpen(v=>!v)}};window.addEventListener('keydown',f);return()=>window.removeEventListener('keydown',f)},[currentUser?.id]);
+  useEffect(()=>safeStorageSet('sidebarCollapsed',sidebarCollapsed),[sidebarCollapsed]);
+  useEffect(()=>{setAnnouncementId(null);setSearchOpen(false)},[currentUser?.id]);
+  useEffect(()=>{const id=new URLSearchParams(location.search).get('announcement');if(currentUser&&id){setAnnouncementId(id);const url=new URL(location.href);url.searchParams.delete('announcement');history.replaceState(null,'',url.pathname+url.search+url.hash)}},[announcements,currentUser?.id]);
   // Preferências de interface & navegação
   const [soundEnabled, setSoundEnabled] = useState(() =>
     safeStorageGet('soundEnabled', true)
@@ -563,20 +575,22 @@ export default function App() {
       supabase.from('profiles').select('id,role,active,data,created_at'),
       supabase.from('tickets').select('id,data'),
       supabase.from('notifications').select('id,data'),
-      supabase.from('app_settings').select('data').eq('id', 1).maybeSingle()
+      supabase.from('app_settings').select('data').eq('id', 1).maybeSingle(),
+      supabase.rpc('bd083_my_notifications')
     ]);
-    const errors = results.filter((r) => r.error).map((r) => r.error.message);
+    const errors = results.slice(0,4).filter((r) => r.error).map((r) => r.error.message);
     if (errors.length) { setDataError(errors.join(' | ')); return; }
     setDataError('');
     setUsers(results[0].data.map((r) => ({...r.data, id:r.id, role:r.role, active:r.active, createdAt:r.created_at})));
     setTickets(results[1].data.map((r) => ({...r.data, id:r.id})));
     setNotifications(results[2].data.map((r) => ({...r.data, id:r.id})));
+    setPersonalNotifications(results[4].error?null:(results[4].data||[]).map(r=>({...r.data,id:r.id})));
     setSettings({...DEFAULT_SETTINGS, ...(results[3].data?.data || {}), categories:results[3].data?.data?.categories || DEFAULT_CATEGORIES, customStages:results[3].data?.data?.customStages || [], departments:results[3].data?.data?.departments || DEFAULT_SETTINGS.departments});
   }, [authUser?.id]);
 
   useEffect(() => {
     if (!authUser || !supabaseConfigured) {
-      setUsers([]); setTickets([]); setNotifications([]);
+      setUsers([]); setTickets([]); setNotifications([]); setPersonalNotifications(null);
       return;
     }
     reloadData();
@@ -584,7 +598,7 @@ export default function App() {
     const channel = supabase.channel('mktdesk-sync')
       .on('postgres_changes', { event:'*', schema:'public', table:'profiles' }, reloadData)
       .on('postgres_changes', { event:'*', schema:'public', table:'tickets' }, reloadData)
-      .on('postgres_changes', { event:'*', schema:'public', table:'notifications' }, reloadData)
+      .on('postgres_changes', { event:'*', schema:'public', table:'notifications',filter:'user_id=eq.'+authUser.id }, reloadData)
       .on('postgres_changes', { event:'*', schema:'public', table:'app_settings' }, reloadData)
       .subscribe();
     const refresh=()=>reloadData(); const poll=setInterval(refresh,30000); window.addEventListener('focus',refresh); return () => { clearInterval(poll); window.removeEventListener('focus',refresh); supabase.removeChannel(channel); };
@@ -749,9 +763,9 @@ export default function App() {
    * --------------------------------------------------------------------------
    */
   const showFloatingPopup = useCallback(
-    ({ title, message, type = 'info', ticketId = null, withSound = true }) => {
+    ({ title, message, type = 'info', ticketId = null, announcementId = null, withSound = true }) => {
       const id = generateId('pop');
-      setPopups((prev) => [{ id, title, message, type, ticketId }, ...prev].slice(0, 4));
+      setPopups((prev) => [{ id, title, message, type, ticketId, announcementId }, ...prev].slice(0, 4));
       if (withSound) {
         playGentleChime(soundEnabled);
       }
@@ -1138,10 +1152,10 @@ export default function App() {
    */
   const myNotifications = useMemo(() => {
     if (!currentUser) return [];
-    return notifications
+    return (personalNotifications||notifications)
       .filter((n) => n.userId === currentUser.id)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  }, [notifications, currentUser]);
+  }, [notifications, personalNotifications, currentUser]);
 
   const seenNotifications = useRef({user:null, ids:new Set(), ready:false});
   useEffect(() => {
@@ -1153,7 +1167,7 @@ export default function App() {
     for(const n of myNotifications) if(!seen.ids.has(n.id)) {
       seen.ids.add(n.id);
       if(!n.read && document.visibilityState==='visible') {
-        showFloatingPopup({title:n.title,message:n.message,ticketId:n.ticketId,type:n.type});
+        showFloatingPopup({title:n.title,message:n.message,ticketId:n.ticketId,announcementId:n.announcementId,type:n.type});
         if(safeStorageGet('vibration:'+currentUser.id,true)) navigator.vibrate?.([140,70,140]);
       }
     }
@@ -1166,8 +1180,9 @@ export default function App() {
   );
 
   const handleMarkNotificationRead = async (notif) => {
+    if (notif.announcementId) { setAnnouncementId(notif.announcementId); setShowNotificationsDrawer(false); }
     if (!notif.read) {
-      await persistNotificationDoc({ ...notif, read: true });
+      try { await persistNotificationDoc({ ...notif, read: true }); } catch {}
     }
     if (notif.ticketId) {
       setActiveTicketId(notif.ticketId);
@@ -1192,7 +1207,7 @@ export default function App() {
    * RENDERIZAÇÃO: TELA DE AUTENTICAÇÃO / PRIMEIRO ACESSO
    * ==========================================================================
    */
-  if (authLoading) return <div className="p-8 text-center">Verificando sessão do Supabase…</div>;
+  if (authLoading) return <div className="bd83-skeleton" role="status"><img src="/logo-bravadesk.svg" alt="BravaDesk"/><span>Preparando seu workspace…</span><i/><i/><i/></div>;
   if (!supabaseConfigured) return <div className="p-8 max-w-lg mx-auto"><h1 className="font-bold">Supabase não configurado</h1><p>Adicione VITE_SUPABASE_URL e VITE_SUPABASE_PUBLISHABLE_KEY na Vercel e publique novamente.</p></div>;
   if (!currentUser) {
     return (
@@ -1231,10 +1246,13 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col pb-20 md:pb-0">
+    <div className={'bd83-shell min-h-screen bg-slate-50 text-slate-900 flex flex-col pb-20 md:pb-0 '+(sidebarCollapsed?'bd83-collapsed':'')}>
+      <PremiumSidebar user={currentUser} adminTab={adminTab} techQueue={techQueue} requesterFilter={requesterFilter} onAdmin={setAdminTab} onTech={setTechQueue} onRequester={setRequesterFilter} onNew={()=>setShowNewTicketModal(true)} onProduction={openProduction} collapsed={sidebarCollapsed} onCollapse={()=>setSidebarCollapsed(v=>!v)}/>
+      <div className="bd83-main">
       {/* CABEÇALHO CORPORATIVO (APENAS USUÁRIO REAL LOGADO) */}
       <HeaderBar
         currentUser={currentUser}
+        onSearch={()=>setSearchOpen(true)}
         unreadCount={unreadCount}
         soundEnabled={soundEnabled}
         onToggleSound={() => setSoundEnabled((v) => !v)}
@@ -1249,6 +1267,7 @@ export default function App() {
         onInstallPWA={triggerPWAInstall}
       />
 
+      <div className="bd83-announcement-wrap"><AnnouncementBanner rows={announcements} user={currentUser} now={nowTick} onOpen={setAnnouncementId}/>{announcementError&&<p role="status" className="bd83-notice">Comunicados indisponíveis: {announcementError}</p>}</div>
       {dataError && (
         <div role="alert" className="mx-auto w-full max-w-7xl px-6 py-3">
           <div className="flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-900">
@@ -1261,7 +1280,7 @@ export default function App() {
       <div className="max-w-7xl w-full mx-auto px-4 py-2"><NotificationPreferences key={currentUser.id} userId={currentUser.id} soundEnabled={soundEnabled} setSoundEnabled={setSoundEnabled}/>{currentUser.role==='solicitante' && <RedeemInvite onDone={reloadData}/>}</div>
       {/* BARRA DE NAVEGAÇÃO SUPERIOR (DESKTOP) POR PERFIL */}
       {['admin','super_admin'].includes(currentUser.role) && (
-        <div className="hidden md:block bg-white border-b border-slate-200 sticky top-16 z-20">
+        <div className="bd83-old-nav hidden md:block bg-white border-b border-slate-200 sticky top-16 z-20">
           <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
             <nav className="flex space-x-1 py-2">
               {[
@@ -1330,7 +1349,7 @@ export default function App() {
       )}
 
       {currentUser.role === 'tecnico' && (
-        <div className="hidden md:block bg-white border-b border-slate-200 sticky top-16 z-20">
+        <div className="bd83-old-nav hidden md:block bg-white border-b border-slate-200 sticky top-16 z-20">
           <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
             <nav className="flex space-x-1 py-2">
               {[
@@ -1402,7 +1421,8 @@ export default function App() {
 
       {/* CONTEÚDO PRINCIPAL POR PERFIL */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-7">
-        <Communication083 user={currentUser} pinnedOnly/><details className="mb-5 bg-white border border-slate-200 rounded-xl p-3"><summary className="cursor-pointer font-bold text-indigo-700">Central de produção · v0.8.3</summary><div className="mt-3"><ProductionPanel key={currentUser.id} user={currentUser} tickets={tickets} users={users} onSelect={setActiveTicketId} calculateSLA={calculateTicketSLA} nowTick={nowTick}/></div></details>
+        <div className="bd83-workspace-heading"><div><span className="bd83-eyebrow">WORKSPACE · MARKETING</span><h1>{['admin','super_admin'].includes(currentUser.role)?({bi:'Visão geral',torre:'Central de demandas',equipe:'Equipe e usuários',config:'Configurações'})[adminTab]:currentUser.role==='tecnico'?'Minha operação':'Minhas demandas'}</h1><p>Organize, acompanhe e entregue com clareza.</p></div><button className="bd83-primary" onClick={()=>setShowNewTicketModal(true)}><Plus size={18}/> Nova demanda</button></div>
+        <details ref={productionRef} open={productionOpen} onToggle={e=>setProductionOpen(e.currentTarget.open)} className="bd83-production mb-5 bg-white border border-slate-200 rounded-xl p-3"><summary className="cursor-pointer font-bold text-indigo-700">Central de produção</summary><div className="mt-3"><ProductionPanel key={currentUser.id} user={currentUser} tickets={tickets} users={users} onSelect={setActiveTicketId} calculateSLA={calculateTicketSLA} nowTick={nowTick} announcementRows={announcements} onOpenAnnouncement={setAnnouncementId}/></div></details>
         {/* ======================== PAINEL ADMIN ======================== */}
         {['admin','super_admin'].includes(currentUser.role) && (
           <>
@@ -1546,6 +1566,9 @@ export default function App() {
         )}
       </main>
 
+      </div>
+      {searchOpen&&<PremiumSearch tickets={tickets} onSelect={setActiveTicketId} onNew={()=>setShowNewTicketModal(true)} onProduction={openProduction} onClose={()=>setSearchOpen(false)}/>}
+      {announcementId&&<AnnouncementDialog id={announcementId} rows={announcements} user={currentUser} onClose={()=>setAnnouncementId(null)} onRead={id=>{for(const n of myNotifications.filter(n=>n.announcementId===id&&!n.read))persistNotificationDoc({...n,read:true}).catch(()=>{});}}/>}
       {/* BARRA DE NAVEGAÇÃO INFERIOR FIXA NO MOBILE (SAFE-AREA) */}
       <MobileBottomNav
         currentUser={currentUser}
@@ -1555,6 +1578,7 @@ export default function App() {
         onChangeTechQueue={setTechQueue}
         requesterFilter={requesterFilter}
         onChangeRequesterFilter={setRequesterFilter}
+        onProduction={openProduction}
         tickets={tickets}
         onOpenNewTicket={() => setShowNewTicketModal(true)}
       />
@@ -1632,6 +1656,7 @@ export default function App() {
         popups={popups}
         onDismiss={(id) => setPopups((prev) => prev.filter((p) => p.id !== id))}
         onSelectTicket={(tid) => setActiveTicketId(tid)}
+        onOpenAnnouncement={setAnnouncementId}
       />
     </div>
   );
@@ -1681,7 +1706,7 @@ function AuthScreen() {
     } catch(err) {setNotice(err.message || 'Não foi possível concluir a operação.');}
     finally {setPending(false);}
   }
-  return <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
+  return <div className="bd83-auth min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4"><div className="bd83-auth-story"><span>BRAVADESK · WORKSPACE</span><h2>Organize.<br/>Produza.<br/>Entregue.</h2><p>Uma central para conectar pessoas, demandas e grandes entregas.</p><div className="bd83-auth-line"/></div>
     <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-7 space-y-5">
       <div className="flex justify-end"><ThemeToggle /></div>
       <div className="text-center"><img src="/logo-bravadesk.svg" alt="BravaDesk" className="mx-auto mb-3 w-16 h-16 rounded-2xl object-contain" /><h1 className="text-2xl font-bold">BravaDesk</h1><p className="text-sm text-slate-500">Central de Serviços e Demandas Corporativas</p></div>
@@ -1705,6 +1730,7 @@ function AuthScreen() {
  */
 function HeaderBar({
   currentUser,
+  onSearch,
   unreadCount,
   soundEnabled,
   onToggleSound,
@@ -1716,7 +1742,7 @@ function HeaderBar({
   const roleInfo = ROLE_META[currentUser.role] || ROLE_META.solicitante;
 
   return (
-    <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200">
+    <header className="bd83-header sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-slate-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
         {/* Marca */}
         <div className="flex items-center gap-3 min-w-0">
@@ -1736,6 +1762,7 @@ function HeaderBar({
           </div>
         </div>
 
+        <button className="bd83-search-trigger" onClick={onSearch} aria-label="Pesquisa global"><Search size={18}/><span>Buscar no BravaDesk</span><kbd>Ctrl K</kbd></button>
         {/* Controles do Usuário Real Logado */}
         <div className="flex items-center gap-1.5 sm:gap-2.5">
           {canInstallPWA && (
@@ -1836,6 +1863,7 @@ function MobileBottomNav({
   onChangeTechQueue,
   requesterFilter,
   onChangeRequesterFilter,
+  onProduction,
   tickets,
   onOpenNewTicket
 }) {
@@ -1848,13 +1876,14 @@ function MobileBottomNav({
     ];
     return (
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 pb-[env(safe-area-inset-bottom)]">
-        <div className="grid grid-cols-4 h-16">
+        <div className="grid grid-cols-5 h-16">
           {items.map((item) => {
             const Icon = item.icon;
             const active = adminTab === item.id;
             return (
               <button
                 key={item.id}
+                aria-current={active?'page':undefined}
                 onClick={() => onChangeAdminTab(item.id)}
                 className={`flex flex-col items-center justify-center gap-1 text-[11px] font-semibold ${
                   active ? 'text-indigo-600' : 'text-slate-500'
@@ -1865,6 +1894,7 @@ function MobileBottomNav({
               </button>
             );
           })}
+          <button onClick={onProduction} className="flex flex-col items-center justify-center gap-1 text-[11px] font-semibold text-slate-500"><Clock className="w-5 h-5"/>Agenda</button>
         </div>
       </nav>
     );
@@ -1879,13 +1909,14 @@ function MobileBottomNav({
     ];
     return (
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 pb-[env(safe-area-inset-bottom)]">
-        <div className="grid grid-cols-4 h-16">
+        <div className="grid grid-cols-5 h-16">
           {items.map((item) => {
             const Icon = item.icon;
             const active = techQueue === item.id;
             return (
               <button
                 key={item.id}
+                aria-current={active?'page':undefined}
                 onClick={() => onChangeTechQueue(item.id)}
                 className={`flex flex-col items-center justify-center gap-1 text-[11px] font-semibold ${
                   active ? 'text-indigo-600' : 'text-slate-500'
@@ -1896,6 +1927,7 @@ function MobileBottomNav({
               </button>
             );
           })}
+          <button onClick={onProduction} className="flex flex-col items-center justify-center gap-1 text-[11px] font-semibold text-slate-500"><Clock className="w-5 h-5"/>Agenda</button>
         </div>
       </nav>
     );
@@ -1908,7 +1940,7 @@ function MobileBottomNav({
 
   return (
     <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 pb-[env(safe-area-inset-bottom)]">
-      <div className="grid grid-cols-3 h-16 items-center">
+      <div className="grid grid-cols-4 h-16 items-center">
         <button
           onClick={() => onChangeRequesterFilter('abertos')}
           className={`flex flex-col items-center justify-center gap-1 text-[11px] font-semibold ${
@@ -1943,6 +1975,7 @@ function MobileBottomNav({
             </span>
           )}
         </button>
+        <button onClick={onProduction} className="flex flex-col items-center justify-center gap-1 text-[11px] font-semibold text-slate-500"><Clock className="w-5 h-5"/>Agenda</button>
       </div>
     </nav>
   );
@@ -2144,7 +2177,7 @@ function AdminDashboardBI({
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-2xs">
         <div>
           <h2 className="text-lg sm:text-xl font-extrabold text-slate-900">
-            Dashboards & Inteligência Operacional (BI) · v0.4
+            Inteligência operacional
           </h2>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
             Indicadores de chamados, meta de fechamento e evolução mensal.
@@ -2211,9 +2244,9 @@ function AdminDashboardBI({
           <div className="lg:col-span-2 space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {[['Pendente',pending,'Aguardando solicitante'],['Aberto',opened.length,'Aberturas no período'],['Fechado',closed.length,'Conclusões no período'],['Meta',rate===null?'—':fmt(rate)+'%','Base: 85%']].map(([label,value,detail])=>(
-                <div key={label} className="bd-metric bg-white rounded-2xl px-2 py-3 text-center min-w-0" style={{color:'#416267'}}>
-                  <div className="text-lg sm:text-xl font-normal">{label}</div>
-                  <div className="text-3xl xl:text-5xl font-normal tabular-nums mt-1">{value}</div>
+                <div key={label} className="bd-metric bg-white rounded-2xl p-4 text-left min-w-0" style={{color:'#416267'}}>
+                  <div className="text-xs sm:text-sm font-semibold">{label}</div>
+                  <div className="text-3xl xl:text-4xl font-bold tabular-nums mt-2 tracking-tight">{value}</div>
                   {label==='Meta' && delta!==null && <div className={"text-sm font-semibold "+(delta>=0?"bd-meta-positive":"bd-meta-negative")} style={{color:delta>=0?'#15803d':'#b74724'}}>{delta>=0?'↑ +':'↓ '}{fmt(delta)}%</div>}
                   <p className="text-[10px] mt-1 text-slate-500">{detail}</p>
                 </div>
@@ -2984,6 +3017,7 @@ function TicketBoardView({
   const [statusFilter, setStatusFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [techFilter, setTechFilter] = useState('all');
+  const [kanbanMobileStatus,setKanbanMobileStatus]=useState('all');
 
   const marketingStaff = useMemo(
     () =>
@@ -3250,14 +3284,14 @@ function TicketBoardView({
         </div>
       ) : (
         /* VISUALIZAÇÃO KANBAN HORIZONTAL RESPONSIVA */
-        <div className="flex gap-4 overflow-x-auto pb-4">
+        <div><div className="bd83-kanban-select md:hidden"><label>Etapa no Kanban<select value={kanbanMobileStatus} onChange={e=>setKanbanMobileStatus(e.target.value)}><option value="all">Todas as etapas</option>{kanbanColumns.map(k=><option key={k} value={k}>{STATUS_META[k].label}</option>)}</select></label></div><div className="bd83-kanban flex gap-4 overflow-x-auto pb-4">
           {kanbanColumns.map((colKey) => {
             const meta = STATUS_META[colKey];
             const colTickets = visibleTickets.filter((t) => t.status === colKey);
             return (
               <div
                 key={colKey}
-                className={`w-72 sm:w-80 shrink-0 bg-slate-100/80 rounded-2xl border border-slate-200 border-t-4 ${meta.headerAccent} p-3 flex flex-col max-h-[72vh]`}
+                className={`${kanbanMobileStatus!=='all'&&kanbanMobileStatus!==colKey?'bd83-kanban-hide':''} w-72 sm:w-80 shrink-0 bg-slate-100/80 rounded-2xl border border-slate-200 border-t-4 ${meta.headerAccent} p-3 flex flex-col max-h-[72vh]`}
               >
                 <div className="flex items-center justify-between mb-3 px-1">
                   <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
@@ -3280,6 +3314,7 @@ function TicketBoardView({
                         <div
                           key={t.id}
                           onClick={() => onSelectTicket(t.id)}
+                          role="button" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onSelectTicket(t.id)}}}
                           className="bg-white p-3.5 rounded-xl border border-slate-200 hover:border-indigo-400 shadow-2xs cursor-pointer space-y-2 transition"
                         >
                           <div className="flex items-center justify-between gap-2">
@@ -3313,7 +3348,7 @@ function TicketBoardView({
               </div>
             );
           })}
-        </div>
+        </div></div>
       )}
     </div>
   );
@@ -3893,8 +3928,8 @@ function TicketDetailModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4">
-      <div className="bg-white w-full h-[100dvh] sm:h-[90vh] sm:max-w-4xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+    <div className="bd83-ticket-overlay fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4">
+      <div className="bd83-ticket-dialog bg-white w-full h-[100dvh] sm:h-[90vh] sm:max-w-4xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden">
         {/* Cabeçalho Fixo */}
         <div className="px-4 sm:px-6 py-4 border-b border-slate-200 flex items-start justify-between gap-3 shrink-0 bg-white">
           <div className="min-w-0">
@@ -3929,7 +3964,7 @@ function TicketDetailModal({
         </div>
 
         {/* Corpo Rolável: Briefing + Barra Técnica + Linha do Tempo */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-slate-50/70">
+        <div className="bd83-ticket-scroll flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-slate-50/70">
           {isStaff && <ProductionChecklist key={ticket.id} ticket={ticket} onReply={text=>{setReplyText(old=>old?old+'\n'+text:text);setActionMode('chat');}}/>}
           <Workflow081 key={ticket.id} ticket={ticket} user={currentUser} users={users} onRefresh={onRefresh} refreshKey={workflowRefresh}/>
           {workflowError&&<p role="alert" className="text-red-700 text-xs">{workflowError}</p>}
@@ -4318,7 +4353,7 @@ function TicketDetailModal({
               return (
                 <div
                   key={item.id}
-                  className={`p-3.5 rounded-2xl border text-xs sm:text-sm ${
+                  className={`bd83-message ${item.authorId===currentUser.id&&!isInternal?"bd83-own-message":""} p-3.5 rounded-2xl border text-xs sm:text-sm ${
                     isInternal
                       ? 'bg-amber-50/90 border-amber-300'
                       : isSacPause
@@ -4474,7 +4509,7 @@ function NotificationsPanel({
           <div>
             <h3 className="font-extrabold text-slate-900">Notificações</h3>
             <p className="text-xs text-slate-500">
-              Clique em um alerta para abrir o chamado correspondente
+              Abra uma demanda ou um comunicado a partir do alerta
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -4514,6 +4549,7 @@ function NotificationsPanel({
               <div
                 key={n.id}
                 onClick={() => onSelectNotification(n)}
+                role="button" tabIndex={0} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();onSelectNotification(n)}}}
                 className={`p-4 cursor-pointer transition hover:bg-slate-50 ${
                   !n.read ? 'bg-indigo-50/50' : ''
                 }`}
@@ -4544,7 +4580,7 @@ function NotificationsPanel({
  * POP-UPS FLUTUANTES EM TEMPO REAL (BANNER TOPO MOBILE / INFERIOR DIREITO PC)
  * ============================================================================
  */
-function ToastPopups({ popups, onDismiss, onSelectTicket }) {
+function ToastPopups({ popups, onDismiss, onSelectTicket, onOpenAnnouncement }) {
   if (!popups || popups.length === 0) return null;
 
   const typeStyles = {
@@ -4560,6 +4596,7 @@ function ToastPopups({ popups, onDismiss, onSelectTicket }) {
           key={p.id}
           onClick={() => {
             if (p.ticketId) onSelectTicket(p.ticketId);
+            if (p.announcementId) onOpenAnnouncement?.(p.announcementId);
             onDismiss(p.id);
           }}
           className={`pointer-events-auto p-3.5 rounded-2xl border shadow-xl flex items-start justify-between gap-3 cursor-pointer transition-all ${

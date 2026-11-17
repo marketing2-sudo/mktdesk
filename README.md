@@ -80,3 +80,6 @@ A versão anterior usava `.upsert()` até para atualizar chamados existentes. Em
 **Não execute novamente nenhum SQL nem desative o RLS para esta correção.** Atualize o `src/App.jsx` no mesmo caminho do GitHub, gere um novo deploy da branch de produção e faça os testes: (1) assumir chamado criado por outro usuário, (2) pedir informações e confirmar o estado `aguardando_solicitante`, (3) registrar resposta como solicitante, (4) enviar entrega para aprovação. Confira os resultados em `Table Editor > tickets` e observe os erros exibidos na tela caso alguma política adicional bloqueie as operações.
 
 **Limitação:** não foi possível executar o build local porque as dependências npm não estão instaladas neste ambiente. Valide o `Ready` do novo commit na Vercel. A correção não foi testada conectando ao banco Supabase do usuário.
+
+## Premium Experience v0.8.3
+Consulte [ATUALIZACAO-V083.md](ATUALIZACAO-V083.md) para instalar sobre a v0.8.2, configurar comunicados e validar a publicação.

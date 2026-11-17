@@ -1,0 +1,16 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {activeAnnouncements,matchesAudience,searchTickets} from '../src/premium083.js';
+const user={role:'solicitante',department:'Reservas'};
+const now=Date.parse('2026-11-17T12:00:00Z');
+const a=(id,x={})=>({id,audience:'all',created_at:'2026-11-17T10:00:00Z',starts_at:'2026-11-17T10:00:00Z',...x});
+test('public audience matches all active app users',()=>assert.equal(matchesAudience(a('1'),user),true));
+test('staff audience excludes requesters',()=>assert.equal(matchesAudience(a('1',{audience:'staff'}),user),false));
+test('staff audience includes super admin',()=>assert.equal(matchesAudience(a('1',{audience:'staff'}),{role:'super_admin'}),true));
+test('department audience only matches chosen department',()=>{assert.equal(matchesAudience(a('1',{audience:'department',department:'Reservas'}),user),true);assert.equal(matchesAudience(a('2',{audience:'department',department:'RH'}),user),false)});
+test('requester audience excludes technician',()=>assert.equal(matchesAudience(a('1',{audience:'requesters'}),{role:'tecnico'}),false));
+test('carousel excludes expired, future and hidden announcements',()=>assert.deepEqual(activeAnnouncements([a('ok'),a('expired',{ends_at:'2026-11-17T12:00:00Z'}),a('future',{starts_at:'2026-11-18T10:00:00Z'}),a('hidden',{show_banner:false}),a('staff',{audience:'staff'})],user,now).map(x=>x.id),['ok']));
+test('pinned appears first then newest',()=>assert.deepEqual(activeAnnouncements([a('old'),a('new',{created_at:'2026-11-17T11:00:00Z'}),a('pin',{pinned:true,created_at:'2026-11-16T10:00:00Z'})],user,now).map(x=>x.id),['pin','new','old']));
+test('search is accent insensitive and matches protocol plus category',()=>assert.equal(searchTickets([{id:'1',title:'Criação de arte',protocol:'#BD-000001',categoryName:'Sinalização'},{id:'2',title:'Outra',protocol:'#BD-000002'}],'bd-000001 sinalizacao')[0].id,'1'));
+test('search never introduces records beyond the supplied authorized list',()=>assert.deepEqual(searchTickets([{id:'1',title:'Arte'}],'segredo'),[]));
+test('search limits recent results without changing initial order',()=>{const tickets=Array.from({length:20},(_,i)=>({id:i,title:'Arte',createdAt:new Date(2020,0,i+1).toISOString()}));assert.equal(searchTickets(tickets,'').length,12);assert.equal(searchTickets(tickets,'')[0].id,19);assert.equal(tickets[0].id,0)});

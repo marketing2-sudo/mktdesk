@@ -1,0 +1,5 @@
+# BravaDesk v0.8.2
+Requer v0.8.1 instalada. Execute supabase/v082.sql antes do deploy. O script apenas disponibiliza o expediente aos usuários ativos através de uma RPC restrita; não muda registros, políticas anteriores ou cálculos de SLA.
+Atualize src/App.jsx, src/business081.js, src/production08.jsx e package.json. Os testes estão em tests/delivery082.test.js. Não altere chaves ou cron.
+Prazos acima de 24 horas são exibidos em dias úteis equivalentes ao expediente registrado no chamado, mais o restante. Até 24 horas permanecem em horas. Chamados legados continuam em horas corridas. A previsão antes de abrir é estimada e usa a configuração atual; depois da abertura usa o SLA do chamado. Na pausa não há data definitiva. O calendário e o CSV exibem o horário previsto em America/Bahia. O dashboard lista até 10 entregas abertas, ordenadas pelo prazo (incluindo atrasadas).
+Validação: testes unitários e análise sintática JS/JSX; não houve build Vercel nem execução SQL em banco real. Testar com solicitante, técnico e observador antes de produção. Para instalar diretamente de versão anterior, seguir primeiro o manual v0.8.1.
